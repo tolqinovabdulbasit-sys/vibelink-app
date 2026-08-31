@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -21,34 +22,39 @@ class _HomeScreenState extends State<HomeScreen> {
   VibrationPattern? _selectedPreset;
   bool _isHoldingLive = false;
   Timer? _liveTickTimer;
-  
-  // 100% Honest ACK & Delivery Status
-  String _deliveryStatus = 'idle'; // 'idle', 'sending', 'delivered', 'failed'
+
+  // Dynamic Home Buttons
+  List<Map<String, dynamic>> _homeButtons = [];
+
+  // Honest & Ultra-Fast Delivery Indicator
+  String _deliveryStatus = 'idle'; // 'idle', 'sent', 'delivered', 'failed'
   String _lastDeliveredTime = '';
   Timer? _deliveryResetTimer;
-
-  // Custom visible pattern IDs set by user in Settings
-  List<String> _visiblePatternIds = [];
 
   @override
   void initState() {
     super.initState();
     _selectedPreset = kBuiltinPresets.first;
-    _loadVisiblePatterns();
+    _loadHomeButtons();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupPeerCallbacks();
     });
   }
 
-  Future<void> _loadVisiblePatterns() async {
+  Future<void> _loadHomeButtons() async {
     final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getStringList('home_visible_patterns');
+    final raw = prefs.getString('home_buttons_v2');
     if (mounted) {
       setState(() {
-        if (saved != null && saved.isNotEmpty) {
-          _visiblePatternIds = List<String>.from(saved);
+        if (raw != null && raw.isNotEmpty) {
+          final List decoded = jsonDecode(raw);
+          _homeButtons = List<Map<String, dynamic>>.from(decoded);
         } else {
-          _visiblePatternIds = kBuiltinPresets.map((p) => p.id).toList();
+          _homeButtons = kBuiltinPresets.map((p) => {
+            'id': p.id,
+            'name': p.name,
+            'pattern': p.toJson(),
+          }).toList();
         }
       });
     }
@@ -83,13 +89,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (status == 'delivered') {
         HapticFeedback.lightImpact();
         _deliveryResetTimer?.cancel();
-        _deliveryResetTimer = Timer(const Duration(seconds: 4), () {
+        _deliveryResetTimer = Timer(const Duration(seconds: 3), () {
           if (mounted) setState(() => _deliveryStatus = 'idle');
         });
       } else if (status == 'failed') {
-        HapticFeedback.vibrate();
         _deliveryResetTimer?.cancel();
-        _deliveryResetTimer = Timer(const Duration(seconds: 4), () {
+        _deliveryResetTimer = Timer(const Duration(seconds: 3), () {
           if (mounted) setState(() => _deliveryStatus = 'idle');
         });
       }
@@ -102,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
     };
   }
 
+  // Ultra-Fast Zero-Latency Direct Messaging
   void _sendPattern(VibrationPattern pattern) {
     final deviceService = context.read<DeviceService>();
     final peerService = context.read<PeerService>();
@@ -171,6 +177,50 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showMenuDialog() {
+    final ds = context.read<DeviceService>();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF12122A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.vibration_rounded, color: Color(0xFF6C63FF)),
+            SizedBox(width: 8),
+            Text('VibeLink Menyu', style: TextStyle(color: Colors.white, fontSize: 18)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.phone_android_rounded, color: Color(0xFF6C63FF)),
+              title: const Text('Mening Qurilma ID', style: TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: Text(ds.myDeviceId, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11)),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: ds.myDeviceId));
+                Navigator.pop(context);
+                _showToast('ID nusxalandi: ${ds.myDeviceId}');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.refresh_rounded, color: Color(0xFF00D4FF)),
+              title: const Text('Ulanishni qayta yangilash', style: TextStyle(color: Colors.white, fontSize: 14)),
+              onTap: () {
+                Navigator.pop(context);
+                if (ds.activeDevice != null) {
+                  context.read<PeerService>().connectWithPeer(ds.activeDevice!.id);
+                  _showToast('Qayta ulanmoqda...');
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showAllHistory() {
     final vibeService = context.read<VibrationService>();
     showModalBottomSheet(
@@ -197,12 +247,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-  }
-
-  List<VibrationPattern> get _displayedPresets {
-    if (_visiblePatternIds.isEmpty) return kBuiltinPresets;
-    final filtered = kBuiltinPresets.where((p) => _visiblePatternIds.contains(p.id)).toList();
-    return filtered.isNotEmpty ? filtered : kBuiltinPresets;
   }
 
   @override
@@ -233,15 +277,18 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Header with Top-Left Menu (☰) Icon Restored
   Widget _buildAppBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Icon(Icons.vibration_rounded, color: Color(0xFF6C63FF), size: 24),
-          SizedBox(width: 8),
-          Text(
+          IconButton(
+            onPressed: _showMenuDialog,
+            icon: const Icon(Icons.menu_rounded, color: Colors.white, size: 24),
+          ),
+          const Text(
             'VibeLink',
             style: TextStyle(
               fontSize: 20,
@@ -250,12 +297,13 @@ class _HomeScreenState extends State<HomeScreen> {
               letterSpacing: -0.3,
             ),
           ),
+          const SizedBox(width: 48),
         ],
       ),
     );
   }
 
-  // 100% Honest ACK & Delivery Status Banner
+  // Simplified Ultra-Fast Delivery Status Banner
   Widget _buildDeliveryStatusBanner() {
     Color bg;
     Color border;
@@ -266,7 +314,7 @@ class _HomeScreenState extends State<HomeScreen> {
       bg = const Color(0xFF3B82F6).withOpacity(0.15);
       border = const Color(0xFF3B82F6).withOpacity(0.4);
       icon = Icons.send_rounded;
-      text = '✉️ 2-telefonga yuborilmoqda... (Kutilmoqda)';
+      text = '✉️ 2-telefonga yuborilmoqda...';
     } else if (_deliveryStatus == 'delivered') {
       bg = const Color(0xFF22C55E).withOpacity(0.15);
       border = const Color(0xFF22C55E).withOpacity(0.4);
@@ -291,8 +339,8 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           if (_deliveryStatus == 'sending')
             const SizedBox(
-              width: 16,
-              height: 16,
+              width: 14,
+              height: 14,
               child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF3B82F6)),
             )
           else
@@ -309,8 +357,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Dynamic Home Buttons Rendered from _homeButtons
   Widget _buildPresetsSection() {
-    final presets = _displayedPresets;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -330,15 +378,20 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.only(left: 16),
-            itemCount: presets.length,
-            itemBuilder: (_, i) => Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: PresetCard(
-                pattern: presets[i],
-                isSelected: _selectedPreset?.id == presets[i].id,
-                onTap: () => _sendPattern(presets[i]),
-              ),
-            ),
+            itemCount: _homeButtons.length,
+            itemBuilder: (_, i) {
+              final btn = _homeButtons[i];
+              final pattern = VibrationPattern.fromJson(btn['pattern']);
+              pattern.name = btn['name'] ?? pattern.name;
+              return Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: PresetCard(
+                  pattern: pattern,
+                  isSelected: _selectedPreset?.id == pattern.id,
+                  onTap: () => _sendPattern(pattern),
+                ),
+              );
+            },
           ),
         ),
       ],
@@ -346,7 +399,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildLiveTouchArea() {
-    final presets = _displayedPresets;
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.all(16),
@@ -406,7 +458,9 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: presets.take(4).map((p) {
+              children: _homeButtons.take(4).map((btn) {
+                final p = VibrationPattern.fromJson(btn['pattern']);
+                final btnName = btn['name'] ?? p.name;
                 final color = Color(int.parse(p.colorHex.replaceFirst('#', '0xFF')));
                 return InkWell(
                   onTap: () => _sendPattern(p),
@@ -426,7 +480,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            p.name,
+                            btnName,
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w500,

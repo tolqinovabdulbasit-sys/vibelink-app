@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -25,8 +26,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<RelayType, bool?> _testResults = {};
   RelayType? _testingType;
 
-  // Pattern visibility for Home Screen (Check / Uncheck)
-  List<String> _visiblePatternIds = [];
+  // Custom Home Buttons List (Created, Edited, Deleted by User)
+  List<Map<String, dynamic>> _homeButtons = [];
 
   @override
   void initState() {
@@ -36,15 +37,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedVisible = prefs.getStringList('home_visible_patterns');
+    final rawButtons = prefs.getString('home_buttons_v2');
     setState(() {
       _notifications = prefs.getBool('notifications_enabled') ?? true;
       _bgMode = prefs.getBool('bg_mode_enabled') ?? true;
       _selectedLang = prefs.getString('app_language') ?? 'Русский';
-      if (savedVisible != null && savedVisible.isNotEmpty) {
-        _visiblePatternIds = List<String>.from(savedVisible);
+      if (rawButtons != null && rawButtons.isNotEmpty) {
+        final List decoded = jsonDecode(rawButtons);
+        _homeButtons = List<Map<String, dynamic>>.from(decoded);
       } else {
-        _visiblePatternIds = kBuiltinPresets.map((p) => p.id).toList();
+        // Default to built-in presets as initial buttons
+        _homeButtons = kBuiltinPresets.map((p) => {
+          'id': p.id,
+          'name': p.name,
+          'pattern': p.toJson(),
+        }).toList();
       }
     });
     if (_bgMode) {
@@ -52,22 +59,211 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _togglePatternVisibility(String id) async {
-    setState(() {
-      if (_visiblePatternIds.contains(id)) {
-        if (_visiblePatternIds.length > 1) {
-          _visiblePatternIds.remove(id);
-        } else {
-          _showSnack('Kamida 1 ta tugma ko\'rinishi kerak!');
-          return;
-        }
-      } else {
-        _visiblePatternIds.add(id);
-      }
-    });
+  Future<void> _saveHomeButtons() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('home_visible_patterns', _visiblePatternIds);
-    _showSnack('Bosh ekran tugmalari yangilandi');
+    await prefs.setString('home_buttons_v2', jsonEncode(_homeButtons));
+    _showSnack('Bosh ekran knopkalari saqlandi');
+  }
+
+  void _addNewHomeButton() {
+    final vibeService = context.read<VibrationService>();
+    final allAvailablePatterns = [
+      ...kBuiltinPresets,
+      ...vibeService.customPatterns,
+    ];
+
+    VibrationPattern selectedPattern = allAvailablePatterns.first;
+    final nameCtrl = TextEditingController(text: selectedPattern.name);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: const Color(0xFF12122A),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.add_circle_outline_rounded, color: Color(0xFF6C63FF)),
+              SizedBox(width: 8),
+              Text('Yangi Knopka Yaratish', style: TextStyle(color: Colors.white, fontSize: 16)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Knopka Nomi:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: nameCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.06),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('Vibratsiya Patternini Tanlang:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<VibrationPattern>(
+                      value: selectedPattern,
+                      dropdownColor: const Color(0xFF1E1E3F),
+                      isExpanded: true,
+                      items: allAvailablePatterns.map((p) => DropdownMenuItem(
+                        value: p,
+                        child: Text('${p.icon} ${p.name}', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                      )).toList(),
+                      onChanged: (p) {
+                        if (p != null) {
+                          setDlgState(() {
+                            selectedPattern = p;
+                            nameCtrl.text = p.name;
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Bekor', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final btnName = nameCtrl.text.trim().isEmpty ? selectedPattern.name : nameCtrl.text.trim();
+                setState(() {
+                  _homeButtons.add({
+                    'id': 'btn_${DateTime.now().millisecondsSinceEpoch}',
+                    'name': btnName,
+                    'pattern': selectedPattern.toJson(),
+                  });
+                });
+                _saveHomeButtons();
+                Navigator.pop(ctx);
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6C63FF)),
+              child: const Text('Qo\'shish', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _editHomeButton(int index) {
+    final btn = _homeButtons[index];
+    final vibeService = context.read<VibrationService>();
+    final allAvailablePatterns = [
+      ...kBuiltinPresets,
+      ...vibeService.customPatterns,
+    ];
+
+    final nameCtrl = TextEditingController(text: btn['name']);
+    VibrationPattern selectedPattern = VibrationPattern.fromJson(btn['pattern']);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: const Color(0xFF12122A),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Knopkani Tahrirlash', style: TextStyle(color: Colors.white, fontSize: 16)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Knopka Nomi:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: nameCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.06),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('Vibratsiya Patternini Tanlang:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: selectedPattern.id,
+                      dropdownColor: const Color(0xFF1E1E3F),
+                      isExpanded: true,
+                      items: allAvailablePatterns.map((p) => DropdownMenuItem(
+                        value: p.id,
+                        child: Text('${p.icon} ${p.name}', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                      )).toList(),
+                      onChanged: (id) {
+                        if (id != null) {
+                          final found = allAvailablePatterns.firstWhere((p) => p.id == id);
+                          setDlgState(() {
+                            selectedPattern = found;
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Bekor', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _homeButtons[index] = {
+                    'id': btn['id'],
+                    'name': nameCtrl.text.trim().isEmpty ? selectedPattern.name : nameCtrl.text.trim(),
+                    'pattern': selectedPattern.toJson(),
+                  };
+                });
+                _saveHomeButtons();
+                Navigator.pop(ctx);
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6C63FF)),
+              child: const Text('Saqlash', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _deleteHomeButton(int index) {
+    if (_homeButtons.length <= 1) {
+      _showSnack('Kamida 1 ta knopka qolishi kerak!');
+      return;
+    }
+    setState(() {
+      _homeButtons.removeAt(index);
+    });
+    _saveHomeButtons();
   }
 
   Future<void> _toggleNotifications(bool val) async {
@@ -159,7 +355,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Icon(Icons.vibration_rounded, color: Color(0xFF6C63FF)),
             SizedBox(width: 8),
-            Text('VibeLink v2.1.0 (st01)', style: TextStyle(color: Colors.white, fontSize: 18)),
+            Text('VibeLink v2.2.0 (st01)', style: TextStyle(color: Colors.white, fontSize: 18)),
           ],
         ),
         content: Column(
@@ -168,9 +364,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             const Text('Real-Vaqtli Masofaviy Vibratsiya Boshqaruv Tizimi', style: TextStyle(color: Colors.white70, fontSize: 13)),
             const SizedBox(height: 12),
-            Text('• 100% Haqiqiy ACK confirmation (Soxta xabarsiz)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• Ultra-tezkor oniy uzatish (<15ms latency)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• Bosh ekran knopkalarini to\'liq boshqarish (Yaratish / O\'chirish / Tahrirlash)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
             Text('• Sodda 3-slayderli Pattern Studio', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
-            Text('• Bosh ekran tugmalarini sozlash (Check/Uncheck)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
             Text('• Fon rejimi va ekran blokirovkasi mosligi', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
           ],
         ),
@@ -237,76 +433,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: const Text('O\'chirish', style: TextStyle(color: Colors.red)),
           ),
         ],
-      ),
-    );
-  }
-
-  void _testOrSendPreset(VibrationPattern pattern) {
-    final vibeService = context.read<VibrationService>();
-    final peerService = context.read<PeerService>();
-    final devService = context.read<DeviceService>();
-
-    vibeService.playPattern(pattern);
-
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF12122A),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Text(pattern.icon, style: const TextStyle(fontSize: 22)),
-            const SizedBox(width: 10),
-            Expanded(child: Text(pattern.name, style: const TextStyle(color: Colors.white, fontSize: 16))),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(pattern.description, style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => vibeService.playPattern(pattern),
-                    icon: const Icon(Icons.replay_rounded, size: 16),
-                    label: const Text('Sinash'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      final active = devService.activeDevice;
-                      if (active != null) {
-                        peerService.sendPattern(pattern, active.id);
-                        Navigator.pop(context);
-                        _showSnack('${active.name}ga yuborildi!');
-                      } else {
-                        _showSnack('Qurilma ulanmagan!');
-                      }
-                    },
-                    icon: const Icon(Icons.send_rounded, size: 16),
-                    label: const Text('Sherikka yubor'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF6C63FF),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -408,32 +534,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 20),
 
-            // 📌 HOME SCREEN BUTTONS CUSTOMIZER (Check/Uncheck)
-            const Text('📌 Bosh Ekran Tugmalari (Boshqarish)',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+            // 🎛️ HOME BUTTONS MANAGER (Create / Edit / Delete)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('🎛️ Bosh Ekran Knopkalari',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+                TextButton.icon(
+                  onPressed: _addNewHomeButton,
+                  icon: const Icon(Icons.add_rounded, size: 18, color: Color(0xFF00D4FF)),
+                  label: const Text('+ Qo\'shish', style: TextStyle(color: Color(0xFF00D4FF), fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
             const SizedBox(height: 4),
-            Text('Bosh ekranda ko\'rinadigan tugmalarni belgilang (Check/Uncheck):',
+            Text('Bosh ekranda ko\'rinadigan knopkalarni boshqaring (yangi qo\'shing, tahrirlang yoki o\'chiring):',
               style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.5))),
             const SizedBox(height: 10),
-            ...kBuiltinPresets.map((p) {
-              final isChecked = _visiblePatternIds.contains(p.id);
-              final color = Color(int.parse(p.colorHex.replaceFirst('#', '0xFF')));
-              return CheckboxListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                dense: true,
-                value: isChecked,
-                activeColor: const Color(0xFF6C63FF),
-                checkColor: Colors.white,
-                tileColor: const Color(0xFF12122A),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                title: Row(
+            ..._homeButtons.asMap().entries.map((entry) {
+              final idx = entry.key;
+              final btn = entry.value;
+              final p = VibrationPattern.fromJson(btn['pattern']);
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF12122A),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.06)),
+                ),
+                child: Row(
                   children: [
-                    Text(p.icon, style: const TextStyle(fontSize: 16)),
-                    const SizedBox(width: 8),
-                    Text(p.name, style: TextStyle(color: isChecked ? Colors.white : Colors.white54, fontSize: 13, fontWeight: isChecked ? FontWeight.w600 : FontWeight.w400)),
+                    Text(p.icon, style: const TextStyle(fontSize: 20)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(btn['name'] ?? p.name, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13)),
+                          Text('Pattern: ${p.name}', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => _editHomeButton(idx),
+                      icon: const Icon(Icons.edit_rounded, color: Color(0xFF6C63FF), size: 18),
+                    ),
+                    IconButton(
+                      onPressed: () => _deleteHomeButton(idx),
+                      icon: Icon(Icons.delete_outline_rounded, color: Colors.red.withOpacity(0.7), size: 18),
+                    ),
                   ],
                 ),
-                onChanged: (_) => _togglePatternVisibility(p.id),
               );
             }),
             const SizedBox(height: 20),
@@ -472,7 +624,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SettingsTile(
               icon: 'ℹ️',
               title: 'Versiya',
-              subtitle: 'VibeLink v2.1.0 (st01)',
+              subtitle: 'VibeLink v2.2.0 (st01)',
               onTap: _showVersionDialog,
               trailing: Icon(Icons.chevron_right_rounded, color: Colors.white.withOpacity(0.3)),
             ),
