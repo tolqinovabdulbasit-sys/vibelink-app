@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../main.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -62,6 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _saveHomeButtons() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('home_buttons_v2', jsonEncode(_homeButtons));
+    homeButtonsVersion.value++;
     _showSnack('Bosh ekran knopkalari saqlandi');
   }
 

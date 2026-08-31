@@ -15,8 +15,9 @@ class StudioScreen extends StatefulWidget {
 class _StudioScreenState extends State<StudioScreen> {
   final _nameCtrl = TextEditingController(text: 'Mening Patternim');
   
-  // 3 Simple Controls:
+  // 4 Simple Controls:
   int _durationMs = 250; // 50ms to 2000ms
+  int _pauseMs = 120; // 50ms to 1000ms
   int _intensityPercent = 80; // 10% to 100%
   int _pulseCount = 2; // 1 to 5 pulses
 
@@ -38,7 +39,7 @@ class _StudioScreenState extends State<StudioScreen> {
       ));
       if (i < _pulseCount - 1) {
         steps.add(VibrationStep(
-          durationMs: 120,
+          durationMs: _pauseMs,
           amplitude: 0,
           type: 'pause',
         ));
@@ -46,10 +47,13 @@ class _StudioScreenState extends State<StudioScreen> {
     }
 
     final name = _nameCtrl.text.trim().isEmpty ? 'Mening Patternim' : _nameCtrl.text.trim();
+    final desc = _pulseCount > 1 
+        ? 'Davomiylik: ${_durationMs}ms, Pauza: ${_pauseMs}ms, Kuch: $_intensityPercent%, Puls: $_pulseCount'
+        : 'Davomiylik: ${_durationMs}ms, Kuch: $_intensityPercent%, Puls: 1';
     return VibrationPattern(
       id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
       name: name,
-      description: 'Davomiylik: ${_durationMs}ms, Kuch: $_intensityPercent%, Puls: $_pulseCount',
+      description: desc,
       icon: '⚡',
       colorHex: '#6C63FF',
       steps: steps,
@@ -201,6 +205,20 @@ class _StudioScreenState extends State<StudioScreen> {
                     divisions: 4,
                     onChanged: (v) => setState(() => _pulseCount = v.round()),
                   ),
+
+                  // Slider 4: Pulslar orasidagi pauza (faqat 2+ puls bo'lganda)
+                  if (_pulseCount > 1) ...[
+                    const Divider(color: Colors.white10, height: 24),
+                    _StudioSliderRow(
+                      label: '4. Pulslar orasidagi pauza',
+                      valueText: '${_pauseMs} ms',
+                      val: _pauseMs.toDouble(),
+                      min: 50,
+                      max: 1000,
+                      divisions: 19,
+                      onChanged: (v) => setState(() => _pauseMs = v.round()),
+                    ),
+                  ],
                 ],
               ),
             ),

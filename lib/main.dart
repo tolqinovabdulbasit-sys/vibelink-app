@@ -6,6 +6,9 @@ import 'services/vibration_service.dart';
 import 'services/peer_service.dart';
 import 'screens/splash_screen.dart';
 
+/// Global notifier for Home Screen custom buttons sync across tabs
+final ValueNotifier<int> homeButtonsVersion = ValueNotifier<int>(0);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../main.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -36,9 +37,18 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _selectedPreset = kBuiltinPresets.first;
     _loadHomeButtons();
+    homeButtonsVersion.addListener(_loadHomeButtons);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupPeerCallbacks();
     });
+  }
+
+  @override
+  void dispose() {
+    homeButtonsVersion.removeListener(_loadHomeButtons);
+    _deliveryResetTimer?.cancel();
+    _liveTickTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadHomeButtons() async {
