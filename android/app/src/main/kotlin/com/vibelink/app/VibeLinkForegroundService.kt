@@ -62,7 +62,7 @@ class VibeLinkForegroundService : Service() {
                 description = "Telefon ekrani o'chganda ham vibratsiyalarni real-vaqtda qabul qilish uchun"
                 setShowBadge(false)
             }
-            val manager = getSystemService(NotificationManager::class.java)
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             manager?.createNotificationChannel(channel)
         }
     }
@@ -78,10 +78,11 @@ class VibeLinkForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("VibeLink — Onlayn")
             .setContentText("Ekran o'chiq holatda ham signallarni qabul qilishga tayyor")
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
 
