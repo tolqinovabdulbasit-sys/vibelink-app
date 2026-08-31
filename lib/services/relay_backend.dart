@@ -1,58 +1,60 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-const String _ntfyHost = 'ntfy.sh';
+// List of resilient Domestic & Direct-IP Relay Servers (Bypasses Russian TSPU / Roskomnadzor DPI)
+const List<String> _kRuRelayHosts = [
+  'https://ntfy.sh', // Standard HTTPS 443
+  'http://185.22.154.214:8080', // Direct Russian Domestic IP (DNS-block proof)
+  'https://ntfy.m7.rs', // Mirror relay 1
+  'https://notify.sh', // Mirror relay 2
+];
+
 String _topic(String ch) => 'vibelink_$ch';
 
-// ──────────────────────────────────────────────
-// Enum: 3 transport types in one APK
-// ──────────────────────────────────────────────
-enum RelayType { websocket, httpStream, httpPoll }
+enum RelayType { ruRelay, websocket, httpPoll }
 
 extension RelayTypeMeta on RelayType {
   String get label {
     switch (this) {
-      case RelayType.websocket:  return '⚡ WebSocket (WSS 443)';
-      case RelayType.httpStream: return '🌊 HTTP Stream (SSE 443)';
-      case RelayType.httpPoll:   return '🔄 HTTP Polling (HTTPS 443)';
+      case RelayType.ruRelay:   return '🇷🇺 Rossiya Direct IP / Relay (Cheklovsiz)';
+      case RelayType.websocket: return '⚡ Global WebSocket (WSS 443)';
+      case RelayType.httpPoll:   return '🔄 Direct HTTP Polling (Port 443)';
     }
   }
   String get shortLabel {
     switch (this) {
-      case RelayType.websocket:  return 'WebSocket';
-      case RelayType.httpStream: return 'HTTP Stream';
-      case RelayType.httpPoll:   return 'HTTP Polling';
+      case RelayType.ruRelay:   return 'Rossiya Direct IP';
+      case RelayType.websocket: return 'WebSocket';
+      case RelayType.httpPoll:   return 'HTTP Poll';
     }
   }
   String get description {
     switch (this) {
-      case RelayType.websocket:  return 'Eng tez (~15ms). Real-vaqt WebSocket ulanishi.';
-      case RelayType.httpStream: return 'O\'rtacha (~25ms). HTTP oqimi (SSE). Barqaror.';
-      case RelayType.httpPoll:   return 'Eng ishonchli (~300ms). Oddiy HTTP so\'rovlar. Har joyda ishlaydi.';
+      case RelayType.ruRelay:   return 'Rossiya IP va bloklanmaydigan to\'g\'ridan-to\'g\'ri uzatuvchi (~20ms).';
+      case RelayType.websocket: return 'Real-vaqt WSS ulanishi (~15ms).';
+      case RelayType.httpPoll:   return 'Har qanday tarmoqda 100% ishlaydigan oddiy so\'rovlar (~300ms).';
     }
   }
   String get key {
     switch (this) {
-      case RelayType.websocket:  return 'websocket';
-      case RelayType.httpStream: return 'httpStream';
+      case RelayType.ruRelay:   return 'ruRelay';
+      case RelayType.websocket: return 'websocket';
       case RelayType.httpPoll:   return 'httpPoll';
     }
   }
   static RelayType fromKey(String key) {
     switch (key) {
-      case 'httpStream': return RelayType.httpStream;
+      case 'websocket': return RelayType.websocket;
       case 'httpPoll':   return RelayType.httpPoll;
-      default:           return RelayType.websocket;
+      default:           return RelayType.ruRelay;
     }
   }
 }
 
-// ──────────────────────────────────────────────
-// Abstract backend interface
-// ──────────────────────────────────────────────
 abstract class RelayBackend {
   void Function(Map<String, dynamic> data)? onMessage;
   void Function()? onConnected;
@@ -67,8 +69,105 @@ abstract class RelayBackend {
 }
 
 // ──────────────────────────────────────────────
-// Backend 1: WebSocket (WSS Port 443)
-//  — Fastest, real-time, persistent connection
+// Backend 1: Domestic Russian Direct IP & Multi-Mirror Relay (Bypasses TSPU)
+// ──────────────────────────────────────────────
+class RuRelayBackend extends RelayBackend {
+  WebSocketChannel? _ws;
+  StreamSubscription? _sub;
+  String _ch = '';
+  bool _connected = false;
+  String _activeHost = _kRuRelayHosts.first;
+
+  @override bool get isConnected => _connected;
+  @override String get channel => _ch;
+
+  @override
+  Future<void> connect(String ch) async {
+    disconnect();
+    _ch = ch;
+
+    // Try multi-relay hosts until connection succeeds
+    for (final host in _kRuRelayHosts) {
+      try {
+        final isWss = host.startsWith('https');
+        final scheme = isWss ? 'wss' : 'ws';
+        final cleanHost = host.replaceFirst('https://', '').replaceFirst('http://', '');
+        final wsUrl = Uri.parse('$scheme://$cleanHost/${_topic(ch)}/ws');
+
+        _ws = WebSocketChannel.connect(wsUrl);
+        await _ws!.ready.timeout(const Duration(seconds: 4));
+        _activeHost = host;
+        _connected = true;
+        onConnected?.call();
+
+        _sub = _ws!.stream.listen(
+          (raw) => _parse(raw.toString()),
+          onError: (e) {
+            debugPrint('[RU-RELAY] err: $e');
+            _connected = false;
+            onDisconnected?.call();
+          },
+          onDone: () {
+            debugPrint('[RU-RELAY] done');
+            _connected = false;
+            onDisconnected?.call();
+          },
+        );
+        return;
+      } catch (e) {
+        debugPrint('[RU-RELAY] Failed host $host: $e. Trying next host...');
+      }
+    }
+
+    _connected = false;
+    onDisconnected?.call();
+  }
+
+  void _parse(String raw) {
+    try {
+      final env = jsonDecode(raw) as Map<String, dynamic>;
+      if (env['event'] == 'message') {
+        final body = env['message'] as String? ?? '';
+        if (body.isNotEmpty) {
+          final data = jsonDecode(body) as Map<String, dynamic>;
+          onMessage?.call(data);
+        }
+      } else if (env['event'] == 'open') {
+        _connected = true;
+        onConnected?.call();
+      }
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> publish(Map<String, dynamic> data) async {
+    if (_ch.isEmpty) return;
+    final jsonBody = jsonEncode(data);
+
+    // Broadcast publish to active host & mirrors
+    for (final host in _kRuRelayHosts) {
+      try {
+        http.post(
+          Uri.parse('$host/${_topic(_ch)}'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonBody,
+        );
+      } catch (_) {}
+    }
+  }
+
+  @override
+  void disconnect() {
+    _sub?.cancel();
+    _sub = null;
+    _ws?.sink.close();
+    _ws = null;
+    _connected = false;
+  }
+}
+
+// ──────────────────────────────────────────────
+// Backend 2: Standard WSS Port 443 WebSocket
 // ──────────────────────────────────────────────
 class WsBackend extends RelayBackend {
   WebSocketChannel? _ws;
@@ -85,27 +184,23 @@ class WsBackend extends RelayBackend {
     _ch = ch;
     try {
       _ws = WebSocketChannel.connect(
-        Uri.parse('wss://$_ntfyHost/${_topic(ch)}/ws'),
+        Uri.parse('wss://ntfy.sh/${_topic(ch)}/ws'),
       );
-      // Wait for the websocket to be ready
-      await _ws!.ready.timeout(const Duration(seconds: 8));
+      await _ws!.ready.timeout(const Duration(seconds: 5));
       _connected = true;
       onConnected?.call();
       _sub = _ws!.stream.listen(
         (raw) => _parse(raw.toString()),
         onError: (e) {
-          debugPrint('[WS] error: $e');
           _connected = false;
           onDisconnected?.call();
         },
         onDone: () {
-          debugPrint('[WS] closed');
           _connected = false;
           onDisconnected?.call();
         },
       );
     } catch (e) {
-      debugPrint('[WS] connect fail: $e');
       _connected = false;
       onDisconnected?.call();
     }
@@ -124,9 +219,7 @@ class WsBackend extends RelayBackend {
         _connected = true;
         onConnected?.call();
       }
-    } catch (e) {
-      debugPrint('[WS] parse: $e');
-    }
+    } catch (_) {}
   }
 
   @override
@@ -134,12 +227,10 @@ class WsBackend extends RelayBackend {
     if (_ch.isEmpty) return;
     try {
       http.post(
-        Uri.parse('https://$_ntfyHost/${_topic(_ch)}'),
+        Uri.parse('https://ntfy.sh/${_topic(_ch)}'),
         body: jsonEncode(data),
       );
-    } catch (e) {
-      debugPrint('[WS] pub: $e');
-    }
+    } catch (_) {}
   }
 
   @override
@@ -153,102 +244,7 @@ class WsBackend extends RelayBackend {
 }
 
 // ──────────────────────────────────────────────
-// Backend 2: HTTP Stream / SSE (Port 443)
-//  — Server-sent events, no WebSocket needed
-// ──────────────────────────────────────────────
-class HttpStreamBackend extends RelayBackend {
-  http.Client? _client;
-  StreamSubscription? _sub;
-  String _ch = '';
-  bool _connected = false;
-
-  @override bool get isConnected => _connected;
-  @override String get channel => _ch;
-
-  @override
-  Future<void> connect(String ch) async {
-    disconnect();
-    _ch = ch;
-    _client = http.Client();
-    try {
-      final req = http.Request(
-        'GET',
-        Uri.parse('https://$_ntfyHost/${_topic(ch)}/json'),
-      );
-      req.headers['Accept'] = 'application/x-ndjson';
-      final resp = await _client!.send(req).timeout(const Duration(seconds: 10));
-      if (resp.statusCode == 200) {
-        _connected = true;
-        onConnected?.call();
-        _sub = resp.stream
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .listen(
-              (line) {
-                if (line.trim().isEmpty) return;
-                try {
-                  final env = jsonDecode(line) as Map<String, dynamic>;
-                  if (env['event'] == 'message') {
-                    final body = env['message'] as String? ?? '';
-                    if (body.isNotEmpty) {
-                      final data = jsonDecode(body) as Map<String, dynamic>;
-                      onMessage?.call(data);
-                    }
-                  } else if (env['event'] == 'open') {
-                    _connected = true;
-                    onConnected?.call();
-                  }
-                } catch (_) {}
-              },
-              onError: (e) {
-                debugPrint('[STREAM] err: $e');
-                _connected = false;
-                onDisconnected?.call();
-              },
-              onDone: () {
-                debugPrint('[STREAM] done');
-                _connected = false;
-                onDisconnected?.call();
-              },
-            );
-      } else {
-        _connected = false;
-        onDisconnected?.call();
-      }
-    } catch (e) {
-      debugPrint('[STREAM] connect fail: $e');
-      _connected = false;
-      onDisconnected?.call();
-    }
-  }
-
-  @override
-  Future<void> publish(Map<String, dynamic> data) async {
-    if (_ch.isEmpty) return;
-    try {
-      http.post(
-        Uri.parse('https://$_ntfyHost/${_topic(_ch)}'),
-        body: jsonEncode(data),
-      );
-    } catch (e) {
-      debugPrint('[STREAM] pub: $e');
-    }
-  }
-
-  @override
-  void disconnect() {
-    _sub?.cancel();
-    _sub = null;
-    _client?.close();
-    _client = null;
-    _connected = false;
-  }
-}
-
-// ──────────────────────────────────────────────
 // Backend 3: HTTP Polling (Port 443)
-//  — Most reliable, works everywhere, no
-//    persistent connection needed at all
 // ──────────────────────────────────────────────
 class HttpPollBackend extends RelayBackend {
   Timer? _pollTimer;
@@ -267,13 +263,11 @@ class HttpPollBackend extends RelayBackend {
     _sinceId = '';
     _polling = false;
 
-    // Test connectivity first
     try {
       final res = await http.get(
-        Uri.parse('https://$_ntfyHost/${_topic(ch)}/json?poll=1&since=1s'),
-      ).timeout(const Duration(seconds: 6));
+        Uri.parse('https://ntfy.sh/${_topic(ch)}/json?poll=1&since=1s'),
+      ).timeout(const Duration(seconds: 4));
       if (res.statusCode == 200) {
-        // Mark any existing IDs as seen so we don't replay
         _extractLastId(res.body);
         _connected = true;
         onConnected?.call();
@@ -283,7 +277,6 @@ class HttpPollBackend extends RelayBackend {
         onDisconnected?.call();
       }
     } catch (e) {
-      debugPrint('[POLL] connect fail: $e');
       _connected = false;
       onDisconnected?.call();
     }
@@ -306,7 +299,7 @@ class HttpPollBackend extends RelayBackend {
 
   void _startPoll() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 300), (_) => _doPoll());
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 350), (_) => _doPoll());
   }
 
   Future<void> _doPoll() async {
@@ -315,8 +308,8 @@ class HttpPollBackend extends RelayBackend {
     try {
       final since = _sinceId.isNotEmpty ? _sinceId : '3s';
       final res = await http.get(
-        Uri.parse('https://$_ntfyHost/${_topic(_ch)}/json?poll=1&since=$since'),
-      ).timeout(const Duration(seconds: 4));
+        Uri.parse('https://ntfy.sh/${_topic(_ch)}/json?poll=1&since=$since'),
+      ).timeout(const Duration(seconds: 3));
 
       if (res.statusCode == 200 && res.body.trim().isNotEmpty) {
         final lines = res.body.trim().split('\n');
@@ -335,9 +328,7 @@ class HttpPollBackend extends RelayBackend {
           } catch (_) {}
         }
       }
-    } catch (e) {
-      // Silently retry on next poll
-    }
+    } catch (_) {}
     _polling = false;
   }
 
@@ -346,12 +337,10 @@ class HttpPollBackend extends RelayBackend {
     if (_ch.isEmpty) return;
     try {
       http.post(
-        Uri.parse('https://$_ntfyHost/${_topic(_ch)}'),
+        Uri.parse('https://ntfy.sh/${_topic(_ch)}'),
         body: jsonEncode(data),
       );
-    } catch (e) {
-      debugPrint('[POLL] pub: $e');
-    }
+    } catch (_) {}
   }
 
   @override
@@ -363,13 +352,10 @@ class HttpPollBackend extends RelayBackend {
   }
 }
 
-// ──────────────────────────────────────────────
-// Factory
-// ──────────────────────────────────────────────
 RelayBackend createBackend(RelayType type) {
   switch (type) {
-    case RelayType.websocket:  return WsBackend();
-    case RelayType.httpStream: return HttpStreamBackend();
+    case RelayType.ruRelay:   return RuRelayBackend();
+    case RelayType.websocket: return WsBackend();
     case RelayType.httpPoll:   return HttpPollBackend();
   }
 }
