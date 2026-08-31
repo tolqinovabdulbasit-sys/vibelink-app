@@ -51,14 +51,13 @@ class _AckStep extends StatelessWidget {
           const SizedBox(width: 20, height: 20,
             child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6C63FF)))
         else
-          Text(icon, style: TextStyle(fontSize: 18, opacity: isDone ? 1.0 : 0.3)),
+          Opacity(
+            opacity: isDone ? 1.0 : 0.3,
+            child: Text(icon, style: const TextStyle(fontSize: 18)),
+          ),
         const SizedBox(height: 4),
         Text(label, style: TextStyle(fontSize: 9, color: isDone ? const Color(0xFF6C63FF) : Colors.white.withOpacity(0.3))),
       ],
     );
   }
-}
-
-extension on Text {
-  Text withOpacity(double opacity) => Text(data ?? '', style: style?.copyWith(color: style?.color?.withOpacity(opacity)));
 }

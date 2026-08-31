@@ -14,7 +14,8 @@ class VibrationService extends ChangeNotifier {
   VibrationPattern? get currentPattern => _currentPattern;
 
   Future<bool> hasVibrator() async {
-    return await Vibration.hasVibrator() ?? false;
+    final hasVib = await Vibration.hasVibrator();
+    return hasVib ?? false;
   }
 
   Future<void> playPattern(VibrationPattern pattern, {String deviceName = ''}) async {
