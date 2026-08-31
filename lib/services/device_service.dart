@@ -7,10 +7,12 @@ import '../models/device_model.dart';
 
 class DeviceService extends ChangeNotifier {
   String _myDeviceId = '';
+  String _myDeviceName = 'Mening Telefonim';
   List<DeviceModel> _pairedDevices = [];
   DeviceModel? _activeDevice;
 
   String get myDeviceId => _myDeviceId;
+  String get myDeviceName => _myDeviceName;
   List<DeviceModel> get pairedDevices => List.unmodifiable(_pairedDevices);
   DeviceModel? get activeDevice => _activeDevice;
 
@@ -35,9 +37,11 @@ class DeviceService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _myDeviceId = prefs.getString('my_device_id') ?? '';
     if (_myDeviceId.isEmpty) {
-      _myDeviceId = const Uuid().v4().replaceAll('-', '').substring(0, 16).toUpperCase();
+      final shortUuid = const Uuid().v4().replaceAll('-', '').substring(0, 8).toUpperCase();
+      _myDeviceId = 'VL-$shortUuid';
       await prefs.setString('my_device_id', _myDeviceId);
     }
+    _myDeviceName = prefs.getString('my_device_name') ?? 'Telefon ${Random().nextInt(900) + 100}';
 
     final devicesJson = prefs.getString('paired_devices') ?? '[]';
     final List decoded = jsonDecode(devicesJson);
@@ -45,14 +49,22 @@ class DeviceService extends ChangeNotifier {
 
     final activeId = prefs.getString('active_device_id');
     if (activeId != null) {
-      _activeDevice = _pairedDevices.firstWhere(
-        (d) => d.id == activeId,
-        orElse: () => _pairedDevices.isNotEmpty ? _pairedDevices.first : DeviceModel(id: '', name: ''),
-      );
-      if (_activeDevice!.id.isEmpty) _activeDevice = null;
+      final found = _pairedDevices.where((d) => d.id == activeId);
+      if (found.isNotEmpty) {
+        _activeDevice = found.first;
+      } else if (_pairedDevices.isNotEmpty) {
+        _activeDevice = _pairedDevices.first;
+      }
     } else if (_pairedDevices.isNotEmpty) {
       _activeDevice = _pairedDevices.first;
     }
+    notifyListeners();
+  }
+
+  Future<void> setMyDeviceName(String name) async {
+    _myDeviceName = name;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('my_device_name', name);
     notifyListeners();
   }
 
@@ -77,16 +89,29 @@ class DeviceService extends ChangeNotifier {
   }
 
   Future<DeviceModel> addDevice({required String peerId, String name = ''}) async {
-    final deviceName = name.trim().isEmpty ? 'Qurilma ${_pairedDevices.length + 1}' : name.trim();
+    // If device already exists, update its name and activate it
+    final existingIndex = _pairedDevices.indexWhere((d) => d.id == peerId);
+    if (existingIndex >= 0) {
+      if (name.trim().isNotEmpty) {
+        _pairedDevices[existingIndex].name = name.trim();
+      }
+      _pairedDevices[existingIndex].status = 'online';
+      _activeDevice = _pairedDevices[existingIndex];
+      await _save();
+      notifyListeners();
+      return _pairedDevices[existingIndex];
+    }
+
+    final deviceName = name.trim().isEmpty ? 'Phone ${_pairedDevices.length + 1}' : name.trim();
     final device = DeviceModel(
       id: peerId,
       name: deviceName,
       status: 'online',
       lastSeen: DateTime.now(),
-      isActive: _pairedDevices.isEmpty,
+      isActive: true,
     );
     _pairedDevices.add(device);
-    if (_pairedDevices.length == 1) _activeDevice = device;
+    _activeDevice = device;
     await _save();
     notifyListeners();
     return device;
@@ -113,6 +138,7 @@ class DeviceService extends ChangeNotifier {
 
   void setActiveDevice(DeviceModel device) {
     _activeDevice = device;
+    _save();
     notifyListeners();
   }
 

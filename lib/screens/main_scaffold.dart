@@ -13,18 +13,18 @@ class MainScaffold extends StatefulWidget {
 class _MainScaffoldState extends State<MainScaffold> {
   int _currentIndex = 0;
 
-  static const _screens = [
-    HomeScreen(),
-    PairingScreen(),
-    StudioScreen(),
-    SettingsScreen(),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final screens = [
+      const HomeScreen(),
+      const PairingScreen(),
+      const StudioScreen(),
+      SettingsScreen(onNavigateTab: (i) => setState(() => _currentIndex = i)),
+    ];
+
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A1A),
-      body: IndexedStack(index: _currentIndex, children: _screens),
+      body: IndexedStack(index: _currentIndex, children: screens),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: const Color(0xFF12122A),
@@ -65,9 +65,8 @@ class _NavItem extends StatelessWidget {
     return GestureDetector(
       onTap: () => onTap(index),
       behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
           color: active ? const Color(0xFF6C63FF).withOpacity(0.15) : Colors.transparent,
@@ -75,10 +74,10 @@ class _NavItem extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 22, color: active ? const Color(0xFF6C63FF) : Colors.white.withOpacity(0.4)),
+            Icon(icon, size: 22, color: active ? const Color(0xFF6C63FF) : Colors.white38),
             const SizedBox(height: 3),
-            Text(label, style: TextStyle(fontSize: 10, fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-              color: active ? const Color(0xFF6C63FF) : Colors.white.withOpacity(0.4))),
+            Text(label, style: TextStyle(fontSize: 10, fontWeight: active ? FontWeight.w700 : FontWeight.w400,
+              color: active ? const Color(0xFF6C63FF) : Colors.white38)),
           ],
         ),
       ),

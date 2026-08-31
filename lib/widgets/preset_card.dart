@@ -1,40 +1,78 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/vibration_pattern.dart';
 
 class PresetCard extends StatelessWidget {
   final VibrationPattern pattern;
   final bool isSelected;
   final VoidCallback onTap;
-  final VoidCallback onSend;
 
-  const PresetCard({super.key, required this.pattern, required this.isSelected, required this.onTap, required this.onSend});
+  const PresetCard({
+    super.key,
+    required this.pattern,
+    required this.isSelected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final color = Color(int.parse(pattern.colorHex.replaceFirst('#', '0xFF')));
-    return GestureDetector(
-      onTap: onTap,
-      onDoubleTap: onSend,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: 90,
+    final stepsCount = pattern.steps.where((s) => s.type == 'vibrate').length;
+
+    return InkWell(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap(); // Instant 0ms trigger
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: 100,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
         decoration: BoxDecoration(
-          color: isSelected ? color.withOpacity(0.2) : const Color(0xFF12122A),
+          color: isSelected ? color.withOpacity(0.2) : const Color(0xFF161632),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected ? color.withOpacity(0.6) : Colors.white.withOpacity(0.06),
+            color: isSelected ? color : Colors.white.withOpacity(0.08),
             width: isSelected ? 1.5 : 1,
           ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(pattern.icon, style: const TextStyle(fontSize: 18)),
+            Text(
+              pattern.icon,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: color,
+                fontFamily: 'JetBrains Mono',
+              ),
+            ),
             const SizedBox(height: 6),
-            Text(pattern.name, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
-            Text(pattern.steps.length > 1 ? '${pattern.steps.length} qadam' : '1 qadam',
-              style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  pattern.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$stepsCount qadam',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.white.withOpacity(0.45),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),

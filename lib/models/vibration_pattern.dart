@@ -16,8 +16,8 @@ class VibrationStep {
   };
 
   factory VibrationStep.fromJson(Map<String, dynamic> json) => VibrationStep(
-    type: json['type'],
-    durationMs: json['durationMs'],
+    type: json['type'] ?? 'vibrate',
+    durationMs: json['durationMs'] ?? 200,
     amplitude: json['amplitude'] ?? 128,
   );
 }
@@ -46,9 +46,9 @@ class VibrationPattern {
   };
 
   factory VibrationPattern.fromJson(Map<String, dynamic> json) => VibrationPattern(
-    id: json['id'],
-    name: json['name'],
-    steps: (json['steps'] as List).map((s) => VibrationStep.fromJson(s)).toList(),
+    id: json['id'] ?? '',
+    name: json['name'] ?? 'Signal',
+    steps: (json['steps'] as List? ?? []).map((s) => VibrationStep.fromJson(s)).toList(),
     colorHex: json['colorHex'] ?? '#6C63FF',
     icon: json['icon'] ?? '📳',
   );
@@ -66,106 +66,139 @@ class VibrationHistory {
     required this.time,
     required this.delivered,
   });
+
+  Map<String, dynamic> toJson() => {
+    'patternName': patternName,
+    'deviceName': deviceName,
+    'time': time.toIso8601String(),
+    'delivered': delivered,
+  };
+
+  factory VibrationHistory.fromJson(Map<String, dynamic> json) => VibrationHistory(
+    patternName: json['patternName'] ?? '',
+    deviceName: json['deviceName'] ?? '',
+    time: json['time'] != null ? DateTime.parse(json['time']) : DateTime.now(),
+    delivered: json['delivered'] ?? true,
+  );
 }
 
-// ---- Built-in Presets ----
+// ---- Exactly 10 Built-in Presets Matching UI Design ----
 final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'two-short',
-    name: 'Signal 1',
-    icon: '•–',
-    colorHex: '#6C63FF',
+    name: '01 Ikki qisqa',
+    icon: '• –',
+    colorHex: '#3B82F6',
     steps: [
-      VibrationStep(type: 'vibrate', durationMs: 150, amplitude: 200),
-      VibrationStep(type: 'pause', durationMs: 100),
-      VibrationStep(type: 'vibrate', durationMs: 300, amplitude: 200),
+      VibrationStep(type: 'vibrate', durationMs: 120, amplitude: 220),
+      VibrationStep(type: 'pause', durationMs: 80),
+      VibrationStep(type: 'vibrate', durationMs: 120, amplitude: 220),
     ],
   ),
   VibrationPattern(
     id: 'three-short',
-    name: 'Signal 2',
+    name: '02 Uch qisqa',
     icon: '•••',
     colorHex: '#A855F7',
     steps: [
-      VibrationStep(type: 'vibrate', durationMs: 120, amplitude: 180),
-      VibrationStep(type: 'pause', durationMs: 80),
-      VibrationStep(type: 'vibrate', durationMs: 120, amplitude: 180),
-      VibrationStep(type: 'pause', durationMs: 80),
-      VibrationStep(type: 'vibrate', durationMs: 120, amplitude: 180),
+      VibrationStep(type: 'vibrate', durationMs: 100, amplitude: 200),
+      VibrationStep(type: 'pause', durationMs: 60),
+      VibrationStep(type: 'vibrate', durationMs: 100, amplitude: 200),
+      VibrationStep(type: 'pause', durationMs: 60),
+      VibrationStep(type: 'vibrate', durationMs: 100, amplitude: 200),
     ],
   ),
   VibrationPattern(
     id: 'long',
-    name: 'Signal 3',
-    icon: '——',
+    name: '03 Uzun',
+    icon: '———',
     colorHex: '#F97316',
     steps: [
-      VibrationStep(type: 'vibrate', durationMs: 800, amplitude: 220),
+      VibrationStep(type: 'vibrate', durationMs: 700, amplitude: 255),
     ],
   ),
   VibrationPattern(
     id: 'long-short',
-    name: 'Signal 4',
-    icon: '–•',
+    name: '04 Uzun + qisqa',
+    icon: '— •',
     colorHex: '#22C55E',
     steps: [
-      VibrationStep(type: 'vibrate', durationMs: 500, amplitude: 200),
+      VibrationStep(type: 'vibrate', durationMs: 400, amplitude: 220),
       VibrationStep(type: 'pause', durationMs: 100),
-      VibrationStep(type: 'vibrate', durationMs: 150, amplitude: 200),
+      VibrationStep(type: 'vibrate', durationMs: 150, amplitude: 220),
     ],
   ),
   VibrationPattern(
-    id: 'heartbeat',
-    name: 'Yurak urishi',
-    icon: '❤️',
-    colorHex: '#EF4444',
-    steps: [
-      VibrationStep(type: 'vibrate', durationMs: 100, amplitude: 255),
-      VibrationStep(type: 'pause', durationMs: 50),
-      VibrationStep(type: 'vibrate', durationMs: 200, amplitude: 255),
-      VibrationStep(type: 'pause', durationMs: 400),
-      VibrationStep(type: 'vibrate', durationMs: 100, amplitude: 255),
-      VibrationStep(type: 'pause', durationMs: 50),
-      VibrationStep(type: 'vibrate', durationMs: 200, amplitude: 255),
-    ],
-  ),
-  VibrationPattern(
-    id: 'escalation',
-    name: "To'lqin",
-    icon: '〰️',
-    colorHex: '#06B6D4',
-    steps: [
-      VibrationStep(type: 'vibrate', durationMs: 100, amplitude: 80),
-      VibrationStep(type: 'pause', durationMs: 80),
-      VibrationStep(type: 'vibrate', durationMs: 150, amplitude: 140),
-      VibrationStep(type: 'pause', durationMs: 80),
-      VibrationStep(type: 'vibrate', durationMs: 200, amplitude: 200),
-      VibrationStep(type: 'pause', durationMs: 80),
-      VibrationStep(type: 'vibrate', durationMs: 300, amplitude: 255),
-    ],
-  ),
-  VibrationPattern(
-    id: 'staccato',
-    name: 'Staccato',
-    icon: '⚡',
+    id: 'short-short',
+    name: '05 Qisqa + qisqa',
+    icon: '• •',
     colorHex: '#EAB308',
     steps: [
-      for (int i = 0; i < 5; i++) ...[
-        VibrationStep(type: 'vibrate', durationMs: 80, amplitude: 230),
-        VibrationStep(type: 'pause', durationMs: 60),
+      VibrationStep(type: 'vibrate', durationMs: 80, amplitude: 200),
+      VibrationStep(type: 'pause', durationMs: 80),
+      VibrationStep(type: 'vibrate', durationMs: 80, amplitude: 200),
+    ],
+  ),
+  VibrationPattern(
+    id: 'short-long',
+    name: '06 Qisqa + uzun',
+    icon: '• —',
+    colorHex: '#06B6D4',
+    steps: [
+      VibrationStep(type: 'vibrate', durationMs: 120, amplitude: 200),
+      VibrationStep(type: 'pause', durationMs: 80),
+      VibrationStep(type: 'vibrate', durationMs: 500, amplitude: 255),
+    ],
+  ),
+  VibrationPattern(
+    id: 'long-long',
+    name: '07 Uzun + uzun',
+    icon: '— —',
+    colorHex: '#EF4444',
+    steps: [
+      VibrationStep(type: 'vibrate', durationMs: 450, amplitude: 240),
+      VibrationStep(type: 'pause', durationMs: 120),
+      VibrationStep(type: 'vibrate', durationMs: 450, amplitude: 240),
+    ],
+  ),
+  VibrationPattern(
+    id: 'three-short-long',
+    name: '08 Uch qisqa + uzun',
+    icon: '••• —',
+    colorHex: '#EC4899',
+    steps: [
+      VibrationStep(type: 'vibrate', durationMs: 80, amplitude: 200),
+      VibrationStep(type: 'pause', durationMs: 50),
+      VibrationStep(type: 'vibrate', durationMs: 80, amplitude: 200),
+      VibrationStep(type: 'pause', durationMs: 50),
+      VibrationStep(type: 'vibrate', durationMs: 80, amplitude: 200),
+      VibrationStep(type: 'pause', durationMs: 100),
+      VibrationStep(type: 'vibrate', durationMs: 400, amplitude: 255),
+    ],
+  ),
+  VibrationPattern(
+    id: 'short-series',
+    name: '09 Qisqa (seriya)',
+    icon: '••••',
+    colorHex: '#6366F1',
+    steps: [
+      for (int i = 0; i < 6; i++) ...[
+        VibrationStep(type: 'vibrate', durationMs: 60, amplitude: 220),
+        VibrationStep(type: 'pause', durationMs: 50),
       ]
     ],
   ),
   VibrationPattern(
-    id: 'pulse',
-    name: 'Puls',
-    icon: '🔄',
-    colorHex: '#EC4899',
+    id: 'long-series',
+    name: '10 Uzun (seriya)',
+    icon: '—— —',
+    colorHex: '#F59E0B',
     steps: [
-      for (int i = 0; i < 3; i++) ...[
-        VibrationStep(type: 'vibrate', durationMs: 200, amplitude: 200),
-        VibrationStep(type: 'pause', durationMs: 200),
-      ]
+      VibrationStep(type: 'vibrate', durationMs: 300, amplitude: 250),
+      VibrationStep(type: 'pause', durationMs: 100),
+      VibrationStep(type: 'vibrate', durationMs: 300, amplitude: 250),
+      VibrationStep(type: 'pause', durationMs: 100),
+      VibrationStep(type: 'vibrate', durationMs: 500, amplitude: 255),
     ],
   ),
 ];
