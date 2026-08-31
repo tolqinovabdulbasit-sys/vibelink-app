@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
 import '../models/vibration_pattern.dart';
 
 class VibrationService extends ChangeNotifier {
+  static const _nativeChannel = MethodChannel('com.vibelink.app/foreground_service');
+
   bool _isVibrating = false;
   Timer? _liveTimer;
   VibrationPattern? _currentPattern;
@@ -24,6 +27,10 @@ class VibrationService extends ChangeNotifier {
   Future<void> _init() async {
     await _loadHistory();
     await _loadCustomPatterns();
+    // Ensure native foreground service is active
+    try {
+      await _nativeChannel.invokeMethod('startService');
+    } catch (_) {}
   }
 
   Future<void> _loadHistory() async {
@@ -120,10 +127,14 @@ class VibrationService extends ChangeNotifier {
       }
       await Vibration.vibrate(pattern: vib, intensities: amp);
     } catch (e) {
-      debugPrint('Vibration error: $e');
+      debugPrint('Vibration plugin error: $e');
+      // Hardware fallback: trigger native vibrator via Foreground Service
       try {
         int total = pattern.steps.fold(0, (sum, s) => sum + (s.type == 'vibrate' ? s.durationMs : 0));
-        await Vibration.vibrate(duration: total > 0 ? total : 300);
+        await _nativeChannel.invokeMethod('vibrateDirect', {
+          'duration': total > 0 ? total : 400,
+          'amplitude': 255,
+        });
       } catch (_) {}
     }
 
@@ -148,17 +159,25 @@ class VibrationService extends ChangeNotifier {
     if (_isVibrating) return;
     _isVibrating = true;
     notifyListeners();
-    Vibration.vibrate(duration: 500, amplitude: 255);
+    try {
+      Vibration.vibrate(duration: 500, amplitude: 255);
+    } catch (_) {
+      _nativeChannel.invokeMethod('vibrateDirect', {'duration': 500, 'amplitude': 255});
+    }
     _liveTimer?.cancel();
     _liveTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
-      Vibration.vibrate(duration: 350, amplitude: 255);
+      try {
+        Vibration.vibrate(duration: 350, amplitude: 255);
+      } catch (_) {
+        _nativeChannel.invokeMethod('vibrateDirect', {'duration': 350, 'amplitude': 255});
+      }
     });
   }
 
   void stopLive() {
     _liveTimer?.cancel();
     _liveTimer = null;
-    Vibration.cancel();
+    try { Vibration.cancel(); } catch (_) {}
     _isVibrating = false;
     notifyListeners();
   }
@@ -166,7 +185,7 @@ class VibrationService extends ChangeNotifier {
   Future<void> stop() async {
     _liveTimer?.cancel();
     _liveTimer = null;
-    await Vibration.cancel();
+    try { await Vibration.cancel(); } catch (_) {}
     _isVibrating = false;
     notifyListeners();
   }
