@@ -462,7 +462,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     IconData iconData;
     switch (type) {
       case RelayType.websocket:  iconData = Icons.bolt_rounded; break;
-      case RelayType.ruRelay: iconData = Icons.stream_rounded; break;
+      case RelayType.domesticCloud: iconData = Icons.cloud_done_rounded; break;
+      case RelayType.localP2p: iconData = Icons.wifi_tethering_rounded; break;
       case RelayType.httpPoll:   iconData = Icons.sync_rounded; break;
     }
 

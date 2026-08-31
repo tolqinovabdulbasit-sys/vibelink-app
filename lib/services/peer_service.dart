@@ -59,7 +59,7 @@ class PeerService extends ChangeNotifier {
   Future<void> init(String myPeerId) async {
     _myId = myPeerId.trim().toUpperCase();
     final prefs = await SharedPreferences.getInstance();
-    final savedType = prefs.getString('relay_type') ?? 'ruRelay';
+    final savedType = prefs.getString('relay_type') ?? 'domesticCloud';
     _relayType = RelayTypeMeta.fromKey(savedType);
   }
 
