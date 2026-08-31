@@ -33,21 +33,30 @@ class _PairingScreenState extends State<PairingScreen> {
     final ds = context.read<DeviceService>();
     final ps = context.read<PeerService>();
 
-    // Generate 6-digit simple PIN
+    // Generate 6-digit simple PIN and listen on pin channel
     ds.generatePairingCode();
-    ps.joinChannel(ds.currentCode);
+    final pinChannel = 'pin_${ds.currentCode}';
+    ps.joinChannel(pinChannel);
     _startTimer(ds);
 
-    // When partner phone joins
+    // Register callback for incoming HELLO or HELLO_ACK
     ps.onPeerJoined = (peerId, name) async {
+      if (!mounted) return;
+      
+      // Save peer using its actual device ID
       final device = await ds.addDevice(
-        peerId: peerId.isNotEmpty ? peerId : ds.currentCode,
+        peerId: peerId,
         name: name.isNotEmpty ? name : 'Sherik Telefon',
       );
+
+      // Switch both devices to deterministic shared pair channel
+      final sharedChannel = PeerService.getPairChannel(ds.myDeviceId, device.id);
+      await ps.joinChannel(sharedChannel);
       ps.setTarget(device.id);
+
       if (mounted) {
         setState(() => _connecting = false);
-        _showSuccessDialog("${device.name} bilan ulanish o'rnatildi!");
+        _showSuccessDialog("${device.name} bilan ulanish o'rnatildi! 🟢");
       }
     };
   }
@@ -56,7 +65,8 @@ class _PairingScreenState extends State<PairingScreen> {
     final ds = context.read<DeviceService>();
     final ps = context.read<PeerService>();
     ds.generatePairingCode();
-    ps.joinChannel(ds.currentCode);
+    final pinChannel = 'pin_${ds.currentCode}';
+    ps.joinChannel(pinChannel);
     _startTimer(ds);
     _showToast('Yangi PIN kod: ${ds.currentCode}');
   }
@@ -95,19 +105,40 @@ class _PairingScreenState extends State<PairingScreen> {
     final ps = context.read<PeerService>();
     final myName = _nameController.text.trim().isEmpty ? ds.myDeviceName : _nameController.text.trim();
 
-    // Join the room and announce presence
-    await ps.joinChannel(code);
-    ps.sendHello(myName);
+    // 1. Join temporary PIN channel
+    final pinChannel = 'pin_$code';
+    await ps.joinChannel(pinChannel);
 
-    // Save device directly into paired list
-    final device = await ds.addDevice(peerId: code, name: myName);
-    ps.setTarget(device.id);
+    // 2. Register callback to receive HELLO_ACK from Generator phone
+    ps.onPeerJoined = (partnerId, partnerName) async {
+      if (!mounted) return;
+      final device = await ds.addDevice(
+        peerId: partnerId,
+        name: partnerName.isNotEmpty ? partnerName : 'Sherik Telefon',
+      );
+      // Switch to shared deterministic channel
+      final sharedChannel = PeerService.getPairChannel(ds.myDeviceId, device.id);
+      await ps.joinChannel(sharedChannel);
+      ps.setTarget(device.id);
 
-    // Give 1 second for handshake
-    Future.delayed(const Duration(milliseconds: 1200), () {
       if (mounted) {
         setState(() => _connecting = false);
-        _showSuccessDialog("Ulanish muvaffaqiyatli saqlandi!");
+        _showSuccessDialog("${device.name} bilan ulanish o'rnatildi! 🟢");
+      }
+    };
+
+    // 3. Send HELLO with my real device ID and name
+    ps.sendHello(myName);
+
+    // Timeout safety fallback (if partner is on backup route)
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted && _connecting) {
+        setState(() => _connecting = false);
+        // Save fallback device entry if ack delayed
+        ds.addDevice(peerId: code, name: 'Sherik Telefon').then((device) {
+          ps.setTarget(device.id);
+          _showSuccessDialog("Ulanish muvaffaqiyatli saqlandi! 🟢");
+        });
       }
     });
   }
@@ -131,8 +162,10 @@ class _PairingScreenState extends State<PairingScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK', style: TextStyle(color: Color(0xFF6C63FF), fontWeight: FontWeight.w700)),
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            child: const Text('Alo', style: TextStyle(color: Color(0xFF6C63FF), fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -161,71 +194,61 @@ class _PairingScreenState extends State<PairingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final ds = context.watch<DeviceService>();
     return SafeArea(
-      child: Column(
-        children: [
-          _buildHeader(),
-          _buildTabs(),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: _showCode ? _buildShowCode() : _buildEnterCode(),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Center(
+              child: Text(
+                'Qurilma Qo\'shish',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+
+            // Tab switchers
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF12122A),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.all(4),
+              child: Row(
+                children: [
+                  _TabBtn(
+                    label: "Kodni Ko'rsat",
+                    icon: Icons.qr_code_rounded,
+                    active: _showCode,
+                    onTap: () => setState(() => _showCode = true),
+                  ),
+                  _TabBtn(
+                    label: "Kodni Kirit",
+                    icon: Icons.keyboard_rounded,
+                    active: !_showCode,
+                    onTap: () => setState(() => _showCode = false),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            if (_showCode) _buildShowCode(ds) else _buildEnterCode(),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildHeader() => const Padding(
-    padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-    child: Center(
-      child: Text(
-        "Qurilma Qo'shish",
-        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white),
-      ),
-    ),
-  );
-
-  Widget _buildTabs() => Container(
-    margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-    padding: const EdgeInsets.all(4),
-    decoration: BoxDecoration(
-      color: const Color(0xFF12122A),
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Row(
-      children: [
-        _TabBtn(
-          label: "Kodni Ko'rsat",
-          icon: Icons.visibility_rounded,
-          active: _showCode,
-          onTap: () {
-            setState(() => _showCode = true);
-            final ds = context.read<DeviceService>();
-            context.read<PeerService>().joinChannel(ds.currentCode);
-          },
-        ),
-        _TabBtn(
-          label: 'Kodni Kirit',
-          icon: Icons.keyboard_rounded,
-          active: !_showCode,
-          onTap: () => setState(() => _showCode = false),
-        ),
-      ],
-    ),
-  );
-
-  Widget _buildShowCode() {
-    final ds = context.watch<DeviceService>();
+  Widget _buildShowCode(DeviceService ds) {
     final code = ds.currentCode;
-
     return Column(
       children: [
-        const SizedBox(height: 12),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(22),
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: const Color(0xFF12122A),
             borderRadius: BorderRadius.circular(20),
@@ -233,27 +256,18 @@ class _PairingScreenState extends State<PairingScreen> {
           ),
           child: Column(
             children: [
-              Text('Ulanish PIN kodi',
-                style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.6))),
-              const SizedBox(height: 14),
+              Text('Sizning PIN kodingiz:', style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.6))),
+              const SizedBox(height: 10),
 
-              // Large, super readable PIN code (e.g. 583 291)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.4)),
-                ),
-                child: Text(
-                  code.length >= 6 ? '${code.substring(0, 3)}  ${code.substring(3)}' : code,
-                  style: const TextStyle(
-                    fontFamily: 'JetBrains Mono',
-                    fontSize: 28,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 4,
-                    color: Color(0xFF00D4FF),
-                  ),
+              // PIN Code text
+              SelectableText(
+                code,
+                style: const TextStyle(
+                  fontFamily: 'JetBrains Mono',
+                  fontSize: 32,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF00D4FF),
+                  letterSpacing: 4,
                 ),
               ),
 
@@ -261,19 +275,13 @@ class _PairingScreenState extends State<PairingScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.timer_outlined, size: 14, color: Colors.white.withOpacity(0.5)),
+                  const Icon(Icons.timer_outlined, size: 14, color: Colors.white38),
                   const SizedBox(width: 4),
-                  Text('Muddati: ', style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5))),
-                  Text(_fmt(_remaining),
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      fontFamily: 'JetBrains Mono',
-                      color: _remaining.inSeconds < 60 ? const Color(0xFFEF4444) : const Color(0xFF22C55E),
-                    )),
+                  Text('Amal qilish muddati: ${_fmt(_remaining)}',
+                    style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.4))),
                 ],
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 16),
 
               // QR Code
               Container(
@@ -282,22 +290,21 @@ class _PairingScreenState extends State<PairingScreen> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: code.isEmpty
-                    ? const SizedBox(width: 140, height: 140)
-                    : QrImageView(
-                        data: code,
-                        version: QrVersions.auto,
-                        size: 140,
-                      ),
+                child: QrImageView(
+                  data: 'vibelink:$code:${ds.myDeviceId}',
+                  version: QrVersions.auto,
+                  size: 140,
+                ),
               ),
-              const SizedBox(height: 18),
+
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: code));
-                        _showToast("PIN nusxalandi: $code");
+                        _showToast('PIN kod nusxalandi: $code');
                       },
                       icon: const Icon(Icons.copy_rounded, size: 16),
                       label: const Text('Nusxalash'),
@@ -314,7 +321,7 @@ class _PairingScreenState extends State<PairingScreen> {
                     child: ElevatedButton.icon(
                       onPressed: _generateNewCode,
                       icon: const Icon(Icons.refresh_rounded, size: 16),
-                      label: const Text('Yangi PIN'),
+                      label: const Text('Yangilash'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF6C63FF),
                         foregroundColor: Colors.white,
@@ -366,11 +373,10 @@ class _PairingScreenState extends State<PairingScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('PIN kodni yoki xona nomini kiriting',
+              Text('PIN kodni kiriting',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.8))),
               const SizedBox(height: 12),
 
-              // Super clean, large, robust text field with zero overflow issues
               TextField(
                 controller: _codeController,
                 textAlign: TextAlign.center,

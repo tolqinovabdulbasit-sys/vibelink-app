@@ -47,6 +47,11 @@ class DeviceService extends ChangeNotifier {
     final List decoded = jsonDecode(devicesJson);
     _pairedDevices = decoded.map((d) => DeviceModel.fromJson(d)).toList();
 
+    // Auto-sanitize: Remove any temporary 6-digit PIN entries or self entries
+    _pairedDevices.removeWhere((d) =>
+      (d.id.length == 6 && int.tryParse(d.id) != null) || d.id == _myDeviceId
+    );
+
     final activeId = prefs.getString('active_device_id');
     if (activeId != null) {
       final found = _pairedDevices.where((d) => d.id == activeId);

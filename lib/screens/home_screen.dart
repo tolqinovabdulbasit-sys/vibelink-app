@@ -41,9 +41,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     peerService.init(devService.myDeviceId);
 
-    // If already paired with active device, auto-join its room
+    // If already paired with active device, join deterministic shared pair channel
     if (devService.activeDevice != null) {
-      peerService.joinChannel(devService.activeDevice!.id);
+      peerService.connectWithPeer(devService.activeDevice!.id);
     }
 
     peerService.onVibeReceived = (pattern) {
@@ -92,9 +92,10 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Make sure we are connected to the channel
-    if (peerService.currentChannel != active.id) {
-      peerService.joinChannel(active.id);
+    // Ensure we are connected to the deterministic shared channel
+    final sharedChannel = PeerService.getPairChannel(deviceService.myDeviceId, active.id);
+    if (peerService.currentChannel != sharedChannel) {
+      peerService.connectWithPeer(active.id);
     }
 
     setState(() {
@@ -122,8 +123,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    if (peerService.currentChannel != active.id) {
-      peerService.joinChannel(active.id);
+    final sharedChannel = PeerService.getPairChannel(deviceService.myDeviceId, active.id);
+    if (peerService.currentChannel != sharedChannel) {
+      peerService.connectWithPeer(active.id);
     }
 
     setState(() => _isHoldingLive = true);
@@ -420,7 +422,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: PresetCard(
                 pattern: kBuiltinPresets[i],
                 isSelected: _selectedPreset?.id == kBuiltinPresets[i].id,
-                onTap: () => _sendPattern(kBuiltinPresets[i]), // Instant 0ms send
+                onTap: () => _sendPattern(kBuiltinPresets[i]),
               ),
             ),
           ),
@@ -440,7 +442,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Row(
         children: [
-          // Instant Hardware Live Touch Button with Listener (0ms delay)
           Listener(
             onPointerDown: (_) => _onLiveTouchStart(),
             onPointerUp: (_) => _onLiveTouchEnd(),
@@ -487,7 +488,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(width: 18),
-          // Instant selection list (Tapping sends immediately)
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

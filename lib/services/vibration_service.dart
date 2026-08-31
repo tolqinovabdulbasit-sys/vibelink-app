@@ -54,6 +54,7 @@ class VibrationService extends ChangeNotifier {
   }
 
   Future<void> playPattern(VibrationPattern pattern, {String deviceName = ''}) async {
+    try { await Vibration.cancel(); } catch (_) {}
     _isVibrating = true;
     _currentPattern = pattern;
     notifyListeners();

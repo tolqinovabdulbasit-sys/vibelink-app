@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../services/device_service.dart';
+import '../services/peer_service.dart';
 import 'home_screen.dart';
 import 'pairing_screen.dart';
 import 'studio_screen.dart';
@@ -10,8 +13,33 @@ class MainScaffold extends StatefulWidget {
   State<MainScaffold> createState() => _MainScaffoldState();
 }
 
-class _MainScaffoldState extends State<MainScaffold> {
+class _MainScaffoldState extends State<MainScaffold> with WidgetsBindingObserver {
   int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final ds = context.read<DeviceService>();
+      final ps = context.read<PeerService>();
+      final active = ds.activeDevice;
+      if (active != null) {
+        final pairCh = PeerService.getPairChannel(ds.myDeviceId, active.id);
+        ps.joinChannel(pairCh);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +63,7 @@ class _MainScaffoldState extends State<MainScaffold> {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              mainAxisAlignment: Main.spaceAround,
               children: [
                 _NavItem(icon: Icons.home_rounded, label: 'Главная', index: 0, current: _currentIndex, onTap: (i) => setState(() => _currentIndex = i)),
                 _NavItem(icon: Icons.devices_rounded, label: 'Устройства', index: 1, current: _currentIndex, onTap: (i) => setState(() => _currentIndex = i)),

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import "package:http/http.dart" as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/vibration_pattern.dart';
 import 'relay_backend.dart';
@@ -20,17 +21,27 @@ class PeerService extends ChangeNotifier {
   Timer? _liveWatchdog;
   bool _isLive = false;
   DateTime? _lastPeerSeen;
+  DateTime _connectionStartTime = DateTime.now();
+
+  // Helper for deterministic shared pair channel between any 2 device IDs
+  static String getPairChannel(String id1, String id2) {
+    final a = id1.trim().replaceAll(' ', '').toUpperCase();
+    final b = id2.trim().replaceAll(' ', '').toUpperCase();
+    final list = [a, b]..sort();
+    return "pair_${list[0]}_${list[1]}";
+  }
 
   // Public getters
   bool get isPeerOnline =>
       _lastPeerSeen != null &&
-      DateTime.now().difference(_lastPeerSeen!).inSeconds < 8;
+      DateTime.now().difference(_lastPeerSeen!).inSeconds < 7;
 
   ConnectionStatus get status => _status;
   bool get isConnected => _status == ConnectionStatus.connected;
   bool get isLive => _isLive;
   String get currentChannel => _currentChannel;
   RelayType get relayType => _relayType;
+  String? get targetPeerId => _targetPeerId;
 
   // Callbacks
   Function(VibrationPattern)? onVibeReceived;
@@ -46,25 +57,23 @@ class PeerService extends ChangeNotifier {
   // ──────────────────────────────────────────────
 
   Future<void> init(String myPeerId) async {
-    _myId = myPeerId;
-    // Load saved relay type
+    _myId = myPeerId.trim().toUpperCase();
     final prefs = await SharedPreferences.getInstance();
     final savedType = prefs.getString('relay_type') ?? 'websocket';
     _relayType = RelayTypeMeta.fromKey(savedType);
   }
 
   // ──────────────────────────────────────────────
-  // Switch backend (from Settings)
+  // Switch backend (from Settings UI)
   // ──────────────────────────────────────────────
 
   Future<void> switchBackend(RelayType newType) async {
-    if (_relayType == newType && _backend != null) return;
+    if (_relayType == newType && _backend != null && _backend!.isConnected) return;
 
     _relayType = newType;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('relay_type', newType.key);
 
-    // Reconnect with new backend if already in a channel
     if (_currentChannel.isNotEmpty) {
       await joinChannel(_currentChannel);
     }
@@ -72,7 +81,7 @@ class PeerService extends ChangeNotifier {
   }
 
   // ──────────────────────────────────────────────
-  // Join channel / room
+  // Join room / channel
   // ──────────────────────────────────────────────
 
   Future<void> joinChannel(String channelCode) async {
@@ -80,20 +89,19 @@ class PeerService extends ChangeNotifier {
     if (cleanCode.isEmpty) return;
 
     _currentChannel = cleanCode;
+    _connectionStartTime = DateTime.now();
     _status = ConnectionStatus.connecting;
     notifyListeners();
 
-    // Tear down old backend
     _backend?.disconnect();
-
-    // Create fresh backend of the selected type
     _backend = createBackend(_relayType);
 
     _backend!.onMessage = (data) => _handleData(data);
     _backend!.onConnected = () {
       _status = ConnectionStatus.connected;
       notifyListeners();
-      debugPrint('[PEER] Connected via ${_relayType.shortLabel} to channel: $cleanCode');
+      debugPrint('[PEER] Connected (${_relayType.shortLabel}) -> Channel: $cleanCode');
+      sendPing();
     };
     _backend!.onDisconnected = () {
       _status = ConnectionStatus.disconnected;
@@ -114,21 +122,38 @@ class PeerService extends ChangeNotifier {
     }
     notifyListeners();
 
-    // Start ping loop
-    sendPing();
     _startPingTimer();
   }
 
+  // Connect directly with target peer via deterministic shared channel
+  Future<void> connectWithPeer(String peerId) async {
+    final cleanPeer = peerId.trim().replaceAll(' ', '').toUpperCase();
+    if (cleanPeer.isEmpty || _myId.isEmpty) return;
+    _targetPeerId = cleanPeer;
+    final sharedChannel = getPairChannel(_myId, cleanPeer);
+    await joinChannel(sharedChannel);
+  }
+
   // ──────────────────────────────────────────────
-  // Handle incoming data
+  // Handle incoming data (Filtered for replay & self)
   // ──────────────────────────────────────────────
 
   void _handleData(Map<String, dynamic> data) {
-    final fromId = data['fromId'] as String? ?? '';
+    final fromId = (data['fromId'] as String? ?? '').trim().toUpperCase();
     final type = data['type'] as String? ?? '';
+    final ts = data['ts'] as int? ?? 0;
 
-    // Ignore own messages
+    // Ignore self messages
     if (fromId == _myId) return;
+
+    // Filter out old buffered messages (> 6 seconds old)
+    if (ts > 0) {
+      final msgTime = DateTime.fromMillisecondsSinceEpoch(ts);
+      if (DateTime.now().difference(msgTime).inSeconds > 6) {
+        debugPrint('[PEER] Ignored old buffered message: $type');
+        return;
+      }
+    }
 
     _lastPeerSeen = DateTime.now();
     onPeerStatusChanged?.call('online');
@@ -138,10 +163,12 @@ class PeerService extends ChangeNotifier {
       case 'HELLO':
         final name = data['name'] as String? ?? 'Sherik';
         onPeerJoined?.call(fromId, name);
+        // Reply with HELLO_ACK containing my real device ID and name
         _publish({
           'type': 'HELLO_ACK',
           'fromId': _myId,
-          'name': 'Mening Telefonim',
+          'name': 'Sherik Telefon',
+          'ts': DateTime.now().millisecondsSinceEpoch,
         });
         break;
 
@@ -162,6 +189,7 @@ class PeerService extends ChangeNotifier {
             'type': 'ACK',
             'id': msgId,
             'fromId': _myId,
+            'ts': DateTime.now().millisecondsSinceEpoch,
           });
         }
         break;
@@ -193,11 +221,12 @@ class PeerService extends ChangeNotifier {
         _publish({
           'type': 'PONG',
           'fromId': _myId,
+          'ts': DateTime.now().millisecondsSinceEpoch,
         });
         break;
 
       case 'PONG':
-        // Peer is alive — already tracked above
+        // Peer status updated above
         break;
 
       case 'ACK':
@@ -219,16 +248,33 @@ class PeerService extends ChangeNotifier {
   }
 
   // ──────────────────────────────────────────────
-  // Publish via selected backend
+  // Multi-Route Publish (Shared Channel + Direct Recipient Channel)
   // ──────────────────────────────────────────────
 
   Future<void> _publish(Map<String, dynamic> data) async {
-    if (_backend == null || _currentChannel.isEmpty) return;
-    await _backend!.publish(data);
+    if (_currentChannel.isEmpty) return;
+    data['ts'] = DateTime.now().millisecondsSinceEpoch;
+    
+    // Primary publish to active channel
+    _backend?.publish(data);
+
+    // Fallback direct publish to peer's personal channel if target set
+    if (_targetPeerId != null && _targetPeerId!.isNotEmpty) {
+      final directTopic = 'vibelink_dev_${_targetPeerId!}';
+      if (_currentChannel != directTopic) {
+        try {
+          final jsonBody = jsonEncode(data);
+          http.post(
+            Uri.parse('https://ntfy.sh/$directTopic'),
+            body: jsonBody,
+          );
+        } catch (_) {}
+      }
+    }
   }
 
   // ──────────────────────────────────────────────
-  // Outgoing messages
+  // Outgoing API
   // ──────────────────────────────────────────────
 
   void sendHello(String myName) {
@@ -267,7 +313,7 @@ class PeerService extends ChangeNotifier {
   }
 
   // ──────────────────────────────────────────────
-  // Ping timer & reconnect
+  // Heartbeat & Reconnect
   // ──────────────────────────────────────────────
 
   void _startPingTimer() {
@@ -286,7 +332,7 @@ class PeerService extends ChangeNotifier {
 
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 3), () {
+    _reconnectTimer = Timer(const Duration(seconds: 2), () {
       if (_currentChannel.isNotEmpty) {
         joinChannel(_currentChannel);
       }
@@ -294,12 +340,12 @@ class PeerService extends ChangeNotifier {
   }
 
   void setTarget(String peerId) {
-    _targetPeerId = peerId;
+    _targetPeerId = peerId.trim().toUpperCase();
     notifyListeners();
   }
 
   // ──────────────────────────────────────────────
-  // Connection test (for Settings UI)
+  // Connectivity Test
   // ──────────────────────────────────────────────
 
   Future<bool> testBackend(RelayType type) async {
@@ -316,10 +362,8 @@ class PeerService extends ChangeNotifier {
       };
 
       await backend.connect(testCh);
-
-      // Wait up to 6 seconds
       final result = await completer.future.timeout(
-        const Duration(seconds: 6),
+        const Duration(seconds: 5),
         onTimeout: () => false,
       );
 
