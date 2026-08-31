@@ -2,12 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/device_service.dart';
 import '../services/vibration_service.dart';
 import '../services/peer_service.dart';
 import '../models/vibration_pattern.dart';
 import '../widgets/preset_card.dart';
-import '../widgets/ack_strip.dart';
 import '../widgets/history_tile.dart';
 import '../widgets/connection_card.dart';
 
@@ -21,17 +21,37 @@ class _HomeScreenState extends State<HomeScreen> {
   VibrationPattern? _selectedPreset;
   bool _isHoldingLive = false;
   Timer? _liveTickTimer;
-  final List<String> _ackStates = ['idle', 'idle', 'idle', 'idle'];
-  Timer? _ackResetTimer;
+  
+  // 100% Honest ACK & Delivery Status
+  String _deliveryStatus = 'idle'; // 'idle', 'sending', 'delivered', 'failed'
   String _lastDeliveredTime = '';
+  Timer? _deliveryResetTimer;
+
+  // Custom visible pattern IDs set by user in Settings
+  List<String> _visiblePatternIds = [];
 
   @override
   void initState() {
     super.initState();
     _selectedPreset = kBuiltinPresets.first;
+    _loadVisiblePatterns();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupPeerCallbacks();
     });
+  }
+
+  Future<void> _loadVisiblePatterns() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('home_visible_patterns');
+    if (mounted) {
+      setState(() {
+        if (saved != null && saved.isNotEmpty) {
+          _visiblePatternIds = List<String>.from(saved);
+        } else {
+          _visiblePatternIds = kBuiltinPresets.map((p) => p.id).toList();
+        }
+      });
+    }
   }
 
   void _setupPeerCallbacks() {
@@ -41,7 +61,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     peerService.init(devService.myDeviceId);
 
-    // If already paired with active device, join deterministic shared pair channel
     if (devService.activeDevice != null) {
       peerService.connectWithPeer(devService.activeDevice!.id);
     }
@@ -54,23 +73,26 @@ class _HomeScreenState extends State<HomeScreen> {
     peerService.onLiveStart = () => vibeService.startLive();
     peerService.onLiveStop = () => vibeService.stopLive();
 
-    peerService.onAckReceived = (id) {
+    peerService.onDeliveryStatusChanged = (status, timeStr) {
       if (!mounted) return;
-      final now = DateTime.now();
-      final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}";
       setState(() {
-        _lastDeliveredTime = timeStr;
-        _ackStates[0] = 'done';
-        _ackStates[1] = 'done';
-        _ackStates[2] = 'done';
-        _ackStates[3] = 'done';
+        _deliveryStatus = status;
+        if (timeStr.isNotEmpty) _lastDeliveredTime = timeStr;
       });
-      _ackResetTimer?.cancel();
-      _ackResetTimer = Timer(const Duration(seconds: 3), () {
-        if (mounted) {
-          setState(() => _ackStates.fillRange(0, 4, 'idle'));
-        }
-      });
+
+      if (status == 'delivered') {
+        HapticFeedback.lightImpact();
+        _deliveryResetTimer?.cancel();
+        _deliveryResetTimer = Timer(const Duration(seconds: 4), () {
+          if (mounted) setState(() => _deliveryStatus = 'idle');
+        });
+      } else if (status == 'failed') {
+        HapticFeedback.vibrate();
+        _deliveryResetTimer?.cancel();
+        _deliveryResetTimer = Timer(const Duration(seconds: 4), () {
+          if (mounted) setState(() => _deliveryStatus = 'idle');
+        });
+      }
     };
 
     peerService.onPeerStatusChanged = (status) {
@@ -80,19 +102,16 @@ class _HomeScreenState extends State<HomeScreen> {
     };
   }
 
-  // --- Instant Zero-Latency Send ---
-
   void _sendPattern(VibrationPattern pattern) {
     final deviceService = context.read<DeviceService>();
     final peerService = context.read<PeerService>();
     final active = deviceService.activeDevice;
 
     if (active == null) {
-      _showToast("Qurilma ulanmagan! 'Устройства' bo'limidan qo'shing.");
+      _showToast("Qurilma ulanmagan! 'Sozlamalar' bo'limidan qo'shing.");
       return;
     }
 
-    // Ensure we are connected to the deterministic shared channel
     final sharedChannel = PeerService.getPairChannel(deviceService.myDeviceId, active.id);
     if (peerService.currentChannel != sharedChannel) {
       peerService.connectWithPeer(active.id);
@@ -100,17 +119,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _selectedPreset = pattern;
-      _ackStates[0] = 'done';
-      _ackStates[1] = 'loading';
-      _ackStates[2] = 'idle';
-      _ackStates[3] = 'idle';
+      _deliveryStatus = 'sending';
     });
 
     peerService.sendPattern(pattern, active.id);
-
-    Future.delayed(const Duration(milliseconds: 40), () {
-      if (mounted) setState(() => _ackStates[1] = 'done');
-    });
   }
 
   void _onLiveTouchStart() {
@@ -118,24 +130,17 @@ class _HomeScreenState extends State<HomeScreen> {
     final peerService = context.read<PeerService>();
     final active = deviceService.activeDevice;
 
-    if (active == null) {
-      _showToast("Avval qurilma tanlang!");
-      return;
-    }
-
-    final sharedChannel = PeerService.getPairChannel(deviceService.myDeviceId, active.id);
-    if (peerService.currentChannel != sharedChannel) {
-      peerService.connectWithPeer(active.id);
-    }
+    if (active == null) return;
+    HapticFeedback.selectionClick();
 
     setState(() => _isHoldingLive = true);
-    HapticFeedback.mediumImpact();
-
     peerService.sendLiveStart(active.id);
 
     _liveTickTimer?.cancel();
-    _liveTickTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
-      peerService.sendLiveTick(active.id);
+    _liveTickTimer = Timer.periodic(const Duration(milliseconds: 150), (_) {
+      if (_isHoldingLive) {
+        peerService.sendLiveTick(active.id);
+      }
     });
   }
 
@@ -143,12 +148,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_isHoldingLive) return;
     _liveTickTimer?.cancel();
     _liveTickTimer = null;
-    setState(() => _isHoldingLive = false);
 
     final deviceService = context.read<DeviceService>();
     final peerService = context.read<PeerService>();
     final active = deviceService.activeDevice;
 
+    setState(() => _isHoldingLive = false);
     if (active != null) {
       peerService.sendLiveStop(active.id);
     }
@@ -166,115 +171,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showMenuDialog() {
-    final ds = context.read<DeviceService>();
-    final ps = context.read<PeerService>();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF12122A),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.info_outline_rounded, color: Color(0xFF6C63FF)),
-            SizedBox(width: 8),
-            Text('VibeLink Info', style: TextStyle(color: Colors.white, fontSize: 18)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Mening ID: ${ds.myDeviceId}',
-              style: const TextStyle(color: Colors.white, fontFamily: 'JetBrains Mono', fontSize: 13)),
-            const SizedBox(height: 8),
-            Text('Kanal: ${ps.currentChannel.isNotEmpty ? ps.currentChannel : "Ulanmagan"}',
-              style: const TextStyle(color: Color(0xFF00D4FF), fontFamily: 'JetBrains Mono', fontSize: 13)),
-            const SizedBox(height: 8),
-            Text('Holat: ${ps.isConnected ? "🟢 Serverga ulangan (HTTPS 443)" : "🔴 Ulanmagan"}',
-              style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13)),
-            const SizedBox(height: 8),
-            Text('Sherik: ${ds.activeDevice != null ? ds.activeDevice!.name : "Tanlanmagan"} (${ps.isPeerOnline ? "🟢 Onlayn" : "⚪ Oflayn"})',
-              style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13)),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Yopish', style: TextStyle(color: Color(0xFF6C63FF))),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showProfileDialog() {
-    final ds = context.read<DeviceService>();
-    final nameCtrl = TextEditingController(text: ds.myDeviceName);
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF12122A),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Mening Profilim', style: TextStyle(color: Colors.white, fontSize: 18)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Qurilma nomi', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
-            const SizedBox(height: 6),
-            TextField(
-              controller: nameCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.white.withOpacity(0.06),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text('Qurilma IDsi', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
-            const SizedBox(height: 4),
-            InkWell(
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: ds.myDeviceId));
-                _showToast('ID nusxalandi');
-              },
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.04),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(child: Text(ds.myDeviceId, style: const TextStyle(color: Color(0xFF00D4FF), fontFamily: 'JetBrains Mono', fontSize: 12))),
-                    const Icon(Icons.copy_rounded, color: Colors.white54, size: 16),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Bekor', style: TextStyle(color: Colors.white54)),
-          ),
-          TextButton(
-            onPressed: () {
-              if (nameCtrl.text.trim().isNotEmpty) {
-                ds.setMyDeviceName(nameCtrl.text.trim());
-              }
-              Navigator.pop(context);
-            },
-            child: const Text('Saqlash', style: TextStyle(color: Color(0xFF6C63FF))),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showAllHistory() {
     final vibeService = context.read<VibrationService>();
     showModalBottomSheet(
@@ -283,80 +179,69 @@ class _HomeScreenState extends State<HomeScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setModalState) => Container(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Barcha Tarix', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white)),
-                  TextButton.icon(
-                    onPressed: () async {
-                      await vibeService.clearHistory();
-                      setModalState(() {});
-                      setState(() {});
-                    },
-                    icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 16),
-                    label: const Text('Tozalash', style: TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
-                  ),
-                ],
-              ),
-              const Divider(color: Colors.white12),
-              Expanded(
-                child: vibeService.history.isEmpty
-                    ? Center(child: Text("Tarix bo'sh", style: TextStyle(color: Colors.white.withOpacity(0.4))))
-                    : ListView.builder(
-                        itemCount: vibeService.history.length,
-                        itemBuilder: (_, i) => HistoryTile(history: vibeService.history[i]),
-                      ),
-              ),
-            ],
-          ),
+      builder: (_) => Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            const Text('Signal Tarixi', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            Expanded(
+              child: vibeService.history.isEmpty
+                  ? Center(child: Text('Tarix bo\'sh', style: TextStyle(color: Colors.white.withOpacity(0.4))))
+                  : ListView.builder(
+                      itemCount: vibeService.history.length,
+                      itemBuilder: (_, i) => HistoryTile(history: vibeService.history[i]),
+                    ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _liveTickTimer?.cancel();
-    _ackResetTimer?.cancel();
-    super.dispose();
+  List<VibrationPattern> get _displayedPresets {
+    if (_visiblePatternIds.isEmpty) return kBuiltinPresets;
+    final filtered = kBuiltinPresets.where((p) => _visiblePatternIds.contains(p.id)).toList();
+    return filtered.isNotEmpty ? filtered : kBuiltinPresets;
   }
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(child: _buildHeader()),
-          const SliverToBoxAdapter(child: ConnectionCard()),
-          if (_lastDeliveredTime.isNotEmpty)
-            SliverToBoxAdapter(child: _buildLastStatusCard()),
-          SliverToBoxAdapter(child: _buildPresetsSection()),
-          SliverToBoxAdapter(child: _buildLiveTouchArea()),
-          SliverToBoxAdapter(child: AckStrip(states: _ackStates)),
-          SliverToBoxAdapter(child: _buildHistorySection()),
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
-        ],
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A1A),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildAppBar(),
+            const ConnectionCard(),
+            if (_deliveryStatus != 'idle') _buildDeliveryStatusBanner(),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  children: [
+                    _buildPresetsSection(),
+                    _buildLiveTouchArea(),
+                    _buildHistorySection(),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildHeader() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget _buildAppBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          IconButton(
-            onPressed: _showMenuDialog,
-            icon: const Icon(Icons.menu_rounded, color: Colors.white, size: 24),
-          ),
-          const Text(
+          Icon(Icons.vibration_rounded, color: Color(0xFF6C63FF), size: 24),
+          SizedBox(width: 8),
+          Text(
             'VibeLink',
             style: TextStyle(
               fontSize: 20,
@@ -365,64 +250,93 @@ class _HomeScreenState extends State<HomeScreen> {
               letterSpacing: -0.3,
             ),
           ),
-          IconButton(
-            onPressed: _showProfileDialog,
-            icon: const Icon(Icons.person_rounded, color: Colors.white, size: 24),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildLastStatusCard() {
+  // 100% Honest ACK & Delivery Status Banner
+  Widget _buildDeliveryStatusBanner() {
+    Color bg;
+    Color border;
+    IconData icon;
+    String text;
+
+    if (_deliveryStatus == 'sending') {
+      bg = const Color(0xFF3B82F6).withOpacity(0.15);
+      border = const Color(0xFF3B82F6).withOpacity(0.4);
+      icon = Icons.send_rounded;
+      text = '✉️ 2-telefonga yuborilmoqda... (Kutilmoqda)';
+    } else if (_deliveryStatus == 'delivered') {
+      bg = const Color(0xFF22C55E).withOpacity(0.15);
+      border = const Color(0xFF22C55E).withOpacity(0.4);
+      icon = Icons.check_circle_rounded;
+      text = '✅ 2-telefonga yetib bordi! ($_lastDeliveredTime)';
+    } else {
+      bg = const Color(0xFFEF4444).withOpacity(0.15);
+      border = const Color(0xFFEF4444).withOpacity(0.4);
+      icon = Icons.error_outline_rounded;
+      text = '⚠️ Yetib bormadi (Sherik javob bermadi)';
+    }
+
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF22C55E).withOpacity(0.12),
+        color: bg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF22C55E).withOpacity(0.3)),
+        border: Border.all(color: border),
       ),
       child: Row(
         children: [
-          const Icon(Icons.check_circle_rounded, color: Color(0xFF22C55E), size: 18),
+          if (_deliveryStatus == 'sending')
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF3B82F6)),
+            )
+          else
+            Icon(icon, color: border, size: 18),
           const SizedBox(width: 10),
-          const Expanded(
-            child: Text('Vibratsiya ishga tushirildi', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+            ),
           ),
-          Text(_lastDeliveredTime, style: const TextStyle(fontSize: 11, fontFamily: 'JetBrains Mono', color: Color(0xFF22C55E))),
         ],
       ),
     );
   }
 
   Widget _buildPresetsSection() {
+    final presets = _displayedPresets;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Padding(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, 10),
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
           child: Text(
             'Tez Signallar (Bir marta bosing)',
             style: TextStyle(
-              fontSize: 16,
+              fontSize: 15,
               fontWeight: FontWeight.w700,
               color: Colors.white,
             ),
           ),
         ),
         SizedBox(
-          height: 100,
+          height: 94,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.only(left: 16),
-            itemCount: kBuiltinPresets.length,
+            itemCount: presets.length,
             itemBuilder: (_, i) => Padding(
               padding: const EdgeInsets.only(right: 10),
               child: PresetCard(
-                pattern: kBuiltinPresets[i],
-                isSelected: _selectedPreset?.id == kBuiltinPresets[i].id,
-                onTap: () => _sendPattern(kBuiltinPresets[i]),
+                pattern: presets[i],
+                isSelected: _selectedPreset?.id == presets[i].id,
+                onTap: () => _sendPattern(presets[i]),
               ),
             ),
           ),
@@ -432,9 +346,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildLiveTouchArea() {
+    final presets = _displayedPresets;
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-      padding: const EdgeInsets.all(18),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF12122A),
         borderRadius: BorderRadius.circular(20),
@@ -449,8 +364,8 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               children: [
                 Container(
-                  width: 105,
-                  height: 105,
+                  width: 95,
+                  height: 95,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: RadialGradient(
@@ -471,12 +386,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Icon(
                     Icons.touch_app_rounded,
                     color: _isHoldingLive ? Colors.white : Colors.white70,
-                    size: 42,
+                    size: 38,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _isHoldingLive ? 'Yuborilmoqda...' : 'Bosib\nushlab turing',
+                  _isHoldingLive ? 'Yuborilmoqda...' : 'Bosib ushlang',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 11,
@@ -487,11 +402,11 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 18),
+          const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: kBuiltinPresets.take(5).map((p) {
+              children: presets.take(4).map((p) {
                 final color = Color(int.parse(p.colorHex.replaceFirst('#', '0xFF')));
                 return InkWell(
                   onTap: () => _sendPattern(p),
@@ -538,14 +453,14 @@ class _HomeScreenState extends State<HomeScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
                   'Tarix',
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 15,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
                   ),
@@ -555,9 +470,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     child: Text(
-                      'Hammasini ko\'r',
+                      'Hammasi',
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF6C63FF),
                       ),
@@ -569,16 +484,16 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           if (vibe.history.isEmpty)
             Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               child: Center(
                 child: Text(
                   'Tarix bo\'sh',
-                  style: TextStyle(color: Colors.white.withOpacity(0.3)),
+                  style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12),
                 ),
               ),
             )
           else
-            ...vibe.history.take(4).map((h) => HistoryTile(history: h)),
+            ...vibe.history.take(3).map((h) => HistoryTile(history: h)),
         ],
       ),
     );

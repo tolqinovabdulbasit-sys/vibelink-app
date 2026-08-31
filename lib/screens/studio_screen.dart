@@ -1,87 +1,24 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 import '../models/vibration_pattern.dart';
 import '../services/vibration_service.dart';
-import '../services/device_service.dart';
 import '../services/peer_service.dart';
+import '../services/device_service.dart';
 
 class StudioScreen extends StatefulWidget {
   const StudioScreen({super.key});
+
   @override
   State<StudioScreen> createState() => _StudioScreenState();
 }
 
 class _StudioScreenState extends State<StudioScreen> {
-  List<VibrationStep> _steps = [];
-  double _amplitude = 50;
-  int _durationMs = 200;
-  int _pauseMs = 100;
-  final _nameCtrl = TextEditingController();
-  List<VibrationPattern> _saved = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadSaved();
-  }
-
-  Future<void> _loadSaved() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('custom_patterns') ?? '[]';
-    final list = jsonDecode(raw) as List;
-    setState(() => _saved = list.map((e) => VibrationPattern.fromJson(e)).toList());
-  }
-
-  Future<void> _saveCurrent() async {
-    if (_steps.isEmpty) {
-      _showSnack('Kamida bitta qadam qo\'shing');
-      return;
-    }
-    final name = _nameCtrl.text.trim().isEmpty ? 'Pattern ${_saved.length + 1}' : _nameCtrl.text.trim();
-    final pattern = VibrationPattern(
-      id: const Uuid().v4(),
-      name: name,
-      steps: List.from(_steps),
-      colorHex: '#6C63FF',
-    );
-    _saved.insert(0, pattern);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('custom_patterns', jsonEncode(_saved.map((p) => p.toJson()).toList()));
-    setState(() {});
-    _showSnack('Saqlandi: $name');
-  }
-
-  Future<void> _testPattern() async {
-    if (_steps.isEmpty) { _showSnack('Avval pattern yarating'); return; }
-    final pattern = VibrationPattern(id: 'test', name: 'Test', steps: _steps);
-    await context.read<VibrationService>().playPattern(pattern);
-    _showSnack('Tebranish bajarildi!');
-  }
-
-  Future<void> _sendSaved(VibrationPattern pattern) async {
-    final ds = context.read<DeviceService>();
-    final ps = context.read<PeerService>();
-    final active = ds.activeDevice;
-    if (active == null) { _showSnack('Qurilma tanlanmagan'); return; }
-    ps.sendPattern(pattern, active.id);
-    _showSnack('Yuborildi!');
-  }
-
-  void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: const Color(0xFF6C63FF), behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))));
-  }
-
-  Future<void> _deleteSaved(String id) async {
-    _saved.removeWhere((p) => p.id == id);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('custom_patterns', jsonEncode(_saved.map((p) => p.toJson()).toList()));
-    setState(() {});
-  }
+  final _nameCtrl = TextEditingController(text: 'Mening Patternim');
+  
+  // 3 Simple Controls:
+  int _durationMs = 250; // 50ms to 2000ms
+  int _intensityPercent = 80; // 10% to 100%
+  int _pulseCount = 2; // 1 to 5 pulses
 
   @override
   void dispose() {
@@ -89,299 +26,358 @@ class _StudioScreenState extends State<StudioScreen> {
     super.dispose();
   }
 
+  VibrationPattern _buildCurrentPattern() {
+    final amplitude = ((_intensityPercent / 100.0) * 255).round().clamp(10, 255);
+    final steps = <VibrationStep>[];
+
+    for (int i = 0; i < _pulseCount; i++) {
+      steps.add(VibrationStep(
+        durationMs: _durationMs,
+        amplitude: amplitude,
+        type: 'vibrate',
+      ));
+      if (i < _pulseCount - 1) {
+        steps.add(VibrationStep(
+          durationMs: 120,
+          amplitude: 0,
+          type: 'pause',
+        ));
+      }
+    }
+
+    final name = _nameCtrl.text.trim().isEmpty ? 'Mening Patternim' : _nameCtrl.text.trim();
+    return VibrationPattern(
+      id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
+      name: name,
+      description: 'Davomiylik: ${_durationMs}ms, Kuch: $_intensityPercent%, Puls: $_pulseCount',
+      icon: '⚡',
+      colorHex: '#6C63FF',
+      steps: steps,
+    );
+  }
+
+  void _testPatternLocally() {
+    final pattern = _buildCurrentPattern();
+    final vibeService = context.read<VibrationService>();
+    vibeService.playPatternLocally(pattern);
+    _showSnack('Vibratsiya sinovdan o\'tkazildi');
+  }
+
+  void _savePattern() {
+    final pattern = _buildCurrentPattern();
+    final vibeService = context.read<VibrationService>();
+    vibeService.saveCustomPattern(pattern);
+    _showSnack('Pattern saqlandi: ${pattern.name}');
+  }
+
+  void _sendPatternToPeer(VibrationPattern pattern) {
+    final ps = context.read<PeerService>();
+    final ds = context.read<DeviceService>();
+    final active = ds.activeDevice;
+
+    if (active == null || !ps.isConnected) {
+      _showSnack('Xato: Sherik telefon ulanmagan!');
+      return;
+    }
+
+    ps.sendPattern(pattern, active.id);
+    _showSnack('${pattern.name} sherikka yuborildi!');
+  }
+
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: const Color(0xFF6C63FF),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
+    final pattern = _buildCurrentPattern();
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A1A),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('Pattern Studio', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
+        centerTitle: true,
+      ),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Center(child: Text('Pattern Studio',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white))),
-            const SizedBox(height: 20),
-            _buildWaveformVisual(),
-            const SizedBox(height: 16),
-            _buildStepsButtons(),
-            const SizedBox(height: 16),
-            _buildStepsList(),
-            const SizedBox(height: 20),
-            _buildSliders(),
-            const SizedBox(height: 20),
-            _buildActions(),
-            const SizedBox(height: 24),
-            const Text('Saqlangan Patternlar',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white)),
-            const SizedBox(height: 12),
-            if (_saved.isEmpty)
-              Center(child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text("Hali pattern yo'q", style: TextStyle(color: Colors.white.withOpacity(0.3))),
-              ))
-            else
-              ..._saved.map((p) => _SavedPatternTile(
-                pattern: p,
-                onSend: () => _sendSaved(p),
-                onDelete: () => _deleteSaved(p.id),
-              )),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWaveformVisual() {
-    return Container(
-      width: double.infinity,
-      height: 100,
-      decoration: BoxDecoration(
-        color: const Color(0xFF12122A),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-      ),
-      child: _steps.isEmpty
-          ? Center(child: Text("Tebranish yoki pauza qo'shing",
-              style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12)))
-          : CustomPaint(painter: _WaveformPainter(_steps), size: Size.infinite),
-    );
-  }
-
-  Widget _buildStepsButtons() {
-    return Row(
-      children: [
-        Expanded(child: _ActionBtn(
-          label: '+ Tebranish',
-          color: const Color(0xFF6C63FF),
-          onTap: () => setState(() => _steps.add(VibrationStep(
-            type: 'vibrate', durationMs: _durationMs, amplitude: (_amplitude * 2.55).round()))),
-        )),
-        const SizedBox(width: 10),
-        Expanded(child: _ActionBtn(
-          label: '+ Pauza',
-          color: const Color(0xFF334155),
-          onTap: () => setState(() => _steps.add(VibrationStep(type: 'pause', durationMs: _pauseMs))),
-        )),
-        const SizedBox(width: 10),
-        _ActionBtn(
-          label: 'Tozala',
-          color: const Color(0xFFEF4444).withOpacity(0.15),
-          textColor: const Color(0xFFEF4444),
-          onTap: () => setState(() => _steps.clear()),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStepsList() {
-    if (_steps.isEmpty) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF12122A),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Wrap(
-        spacing: 6, runSpacing: 6,
-        children: _steps.asMap().entries.map((e) {
-          final s = e.value;
-          final isVibe = s.type == 'vibrate';
-          return GestureDetector(
-            onTap: () => setState(() => _steps.removeAt(e.key)),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            // Waveform Preview Card
+            Container(
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: isVibe ? const Color(0xFF6C63FF).withOpacity(0.2) : Colors.white.withOpacity(0.06),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: isVibe ? const Color(0xFF6C63FF).withOpacity(0.4) : Colors.white.withOpacity(0.1)),
+                gradient: LinearGradient(
+                  colors: [const Color(0xFF12122A), const Color(0xFF1E1E3F)],
+                ),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.3)),
               ),
-              child: Text(
-                isVibe ? '▶ ${s.durationMs}ms' : '⏸ ${s.durationMs}ms',
-                style: TextStyle(fontSize: 11, fontFamily: 'JetBrains Mono',
-                  color: isVibe ? const Color(0xFF6C63FF) : Colors.white.withOpacity(0.5)),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(pattern.name, style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white, fontSize: 16)),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6C63FF).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${pattern.totalDurationMs} ms',
+                          style: const TextStyle(color: Color(0xFF6C63FF), fontWeight: FontWeight.w700, fontSize: 12, fontFamily: 'JetBrains Mono'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 60,
+                    width: double.infinity,
+                    child: CustomPaint(
+                      painter: _SimpleWaveformPainter(pattern.steps),
+                    ),
+                  ),
+                ],
               ),
             ),
-          );
-        }).toList(),
-      ),
-    );
-  }
+            const SizedBox(height: 20),
 
-  Widget _buildSliders() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: const Color(0xFF12122A), borderRadius: BorderRadius.circular(16)),
-      child: Column(
-        children: [
-          _SliderRow(label: 'Kuch', value: _amplitude.round(), suffix: '%',
-            min: 1, max: 100, val: _amplitude,
-            onChanged: (v) => setState(() => _amplitude = v)),
-          _SliderRow(label: 'Davomiylik', value: _durationMs, suffix: 'ms',
-            min: 50, max: 1000, val: _durationMs.toDouble(),
-            onChanged: (v) => setState(() => _durationMs = v.round())),
-          _SliderRow(label: 'Pauza', value: _pauseMs, suffix: 'ms',
-            min: 0, max: 500, val: _pauseMs.toDouble(),
-            onChanged: (v) => setState(() => _pauseMs = v.round()), isLast: true),
-        ],
-      ),
-    );
-  }
+            // 3 Simple Controls Section
+            const Text('Vibratsiya Sozlamalari', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF12122A),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Column(
+                children: [
+                  // Slider 1: Davomiylik
+                  _StudioSliderRow(
+                    label: '1. Davomiylik (har bir puls)',
+                    valueText: '${_durationMs} ms',
+                    val: _durationMs.toDouble(),
+                    min: 50,
+                    max: 2000,
+                    divisions: 39,
+                    onChanged: (v) => setState(() => _durationMs = v.round()),
+                  ),
+                  const Divider(color: Colors.white10, height: 24),
 
-  Widget _buildActions() {
-    return Column(
-      children: [
-        TextField(
-          controller: _nameCtrl,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: 'Pattern nomi...',
-            hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
-            filled: true, fillColor: const Color(0xFF12122A),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(child: OutlinedButton.icon(
-              onPressed: _testPattern,
-              icon: const Icon(Icons.play_arrow_rounded),
-              label: const Text('Sinovdan o\'tkaz'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF6C63FF),
-                side: const BorderSide(color: Color(0xFF6C63FF)),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  // Slider 2: Kuch
+                  _StudioSliderRow(
+                    label: '2. Vibratsiya kuchi',
+                    valueText: '$_intensityPercent %',
+                    val: _intensityPercent.toDouble(),
+                    min: 10,
+                    max: 100,
+                    divisions: 18,
+                    onChanged: (v) => setState(() => _intensityPercent = v.round()),
+                  ),
+                  const Divider(color: Colors.white10, height: 24),
+
+                  // Slider 3: Puls soni
+                  _StudioSliderRow(
+                    label: '3. Puls (takrorlanish) soni',
+                    valueText: '$_pulseCount marta',
+                    val: _pulseCount.toDouble(),
+                    min: 1,
+                    max: 5,
+                    divisions: 4,
+                    onChanged: (v) => setState(() => _pulseCount = v.round()),
+                  ),
+                ],
               ),
-            )),
-            const SizedBox(width: 12),
-            Expanded(child: ElevatedButton.icon(
-              onPressed: _saveCurrent,
-              icon: const Icon(Icons.save_rounded),
-              label: const Text('Saqlash'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF6C63FF),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            const SizedBox(height: 20),
+
+            // Pattern Name & Action Buttons
+            const Text('Saqlash va Sinash', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _nameCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Pattern nomi (masalan: Mening Signalim)...',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                filled: true,
+                fillColor: const Color(0xFF12122A),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
               ),
-            )),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _testPatternLocally,
+                    icon: const Icon(Icons.vibration_rounded),
+                    label: const Text('Sinab ko\'rish'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF00D4FF),
+                      side: const BorderSide(color: Color(0xFF00D4FF)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _savePattern,
+                    icon: const Icon(Icons.save_rounded),
+                    label: const Text('Saqlash'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6C63FF),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+
+            // Saved Patterns Section
+            Consumer<VibrationService>(
+              builder: (ctx, vibe, _) {
+                if (vibe.customPatterns.isEmpty) return const SizedBox.shrink();
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Saqlangan Patternlar', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+                    const SizedBox(height: 10),
+                    ...vibe.customPatterns.map((p) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF12122A),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.graphic_eq_rounded, color: Color(0xFF6C63FF), size: 22),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13)),
+                                Text(p.description, style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => _sendPatternToPeer(p),
+                            icon: const Icon(Icons.send_rounded, color: Color(0xFF22C55E), size: 20),
+                          ),
+                          IconButton(
+                            onPressed: () => vibe.deleteCustomPattern(p.id),
+                            icon: Icon(Icons.delete_outline_rounded, color: Colors.red.withOpacity(0.7), size: 20),
+                          ),
+                        ],
+                      ),
+                    )),
+                  ],
+                );
+              },
+            ),
           ],
         ),
-      ],
+      ),
     );
   }
 }
 
-class _ActionBtn extends StatelessWidget {
+class _StudioSliderRow extends StatelessWidget {
   final String label;
-  final Color color;
-  final Color? textColor;
-  final VoidCallback onTap;
-  const _ActionBtn({required this.label, required this.color, required this.onTap, this.textColor});
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(10)),
-      child: Text(label, textAlign: TextAlign.center,
-        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: textColor ?? Colors.white)),
-    ),
-  );
-}
-
-class _SliderRow extends StatelessWidget {
-  final String label;
-  final int value;
-  final String suffix;
-  final double min, max, val;
+  final String valueText;
+  final double val, min, max;
+  final int divisions;
   final ValueChanged<double> onChanged;
-  final bool isLast;
-  const _SliderRow({required this.label, required this.value, required this.suffix,
-    required this.min, required this.max, required this.val, required this.onChanged, this.isLast = false});
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.7))),
-          Text('$value$suffix', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF6C63FF), fontFamily: 'JetBrains Mono')),
-        ],
-      ),
-      SliderTheme(
-        data: SliderThemeData(
-          trackHeight: 3,
-          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-          activeTrackColor: const Color(0xFF6C63FF),
-          inactiveTrackColor: Colors.white.withOpacity(0.1),
-          thumbColor: const Color(0xFF6C63FF),
-          overlayColor: const Color(0xFF6C63FF).withOpacity(0.2),
-        ),
-        child: Slider(value: val, min: min, max: max, onChanged: onChanged),
-      ),
-      if (!isLast) Divider(color: Colors.white.withOpacity(0.06), height: 1),
-    ],
-  );
-}
 
-class _SavedPatternTile extends StatelessWidget {
-  final VibrationPattern pattern;
-  final VoidCallback onSend;
-  final VoidCallback onDelete;
-  const _SavedPatternTile({required this.pattern, required this.onSend, required this.onDelete});
+  const _StudioSliderRow({
+    required this.label,
+    required this.valueText,
+    required this.val,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.onChanged,
+  });
+
   @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 10),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    decoration: BoxDecoration(
-      color: const Color(0xFF12122A),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Colors.white.withOpacity(0.06)),
-    ),
-    child: Row(
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: 40, height: 40,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: const Color(0xFF6C63FF).withOpacity(0.15),
-          ),
-          alignment: Alignment.center,
-          child: const Icon(Icons.graphic_eq_rounded, color: Color(0xFF6C63FF), size: 20),
-        ),
-        const SizedBox(width: 12),
-        Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(pattern.name, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
-            Text('${pattern.steps.length} qadam', style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.4))),
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.85))),
+            Text(valueText, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6C63FF), fontFamily: 'JetBrains Mono')),
           ],
-        )),
-        IconButton(onPressed: onSend, icon: const Icon(Icons.send_rounded, color: Color(0xFF6C63FF), size: 20)),
-        IconButton(onPressed: onDelete, icon: Icon(Icons.delete_outline_rounded, color: const Color(0xFFEF4444).withOpacity(0.7), size: 20)),
+        ),
+        const SizedBox(height: 6),
+        SliderTheme(
+          data: SliderThemeData(
+            trackHeight: 4,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
+            activeTrackColor: const Color(0xFF6C63FF),
+            inactiveTrackColor: Colors.white.withOpacity(0.1),
+            thumbColor: const Color(0xFF6C63FF),
+            overlayColor: const Color(0xFF6C63FF).withOpacity(0.2),
+          ),
+          child: Slider(
+            value: val,
+            min: min,
+            max: max,
+            divisions: divisions,
+            onChanged: onChanged,
+          ),
+        ),
       ],
-    ),
-  );
+    );
+  }
 }
 
-class _WaveformPainter extends CustomPainter {
+class _SimpleWaveformPainter extends CustomPainter {
   final List<VibrationStep> steps;
-  _WaveformPainter(this.steps);
+  _SimpleWaveformPainter(this.steps);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final total = steps.fold(0, (s, e) => s + e.durationMs).toDouble();
-    if (total == 0) return;
-    double x = 16;
-    final maxW = size.width - 32;
+    if (steps.isEmpty) return;
+
+    final totalMs = steps.fold(0, (s, e) => s + e.durationMs).toDouble();
+    if (totalMs <= 0) return;
+
+    double x = 12;
+    final maxW = size.width - 24;
     final centerY = size.height / 2;
     final paint = Paint()..strokeCap = StrokeCap.round..strokeWidth = 4;
+
     for (final step in steps) {
-      final w = (step.durationMs / total) * maxW;
+      final w = (step.durationMs / totalMs) * maxW;
       if (step.type == 'vibrate') {
-        final h = (step.amplitude / 255.0) * (centerY - 8);
+        final h = (step.amplitude / 255.0) * (centerY - 6);
         paint.color = const Color(0xFF6C63FF);
         canvas.drawLine(Offset(x, centerY - h), Offset(x + w, centerY - h), paint);
         canvas.drawLine(Offset(x, centerY + h), Offset(x + w, centerY + h), paint);
@@ -389,7 +385,7 @@ class _WaveformPainter extends CustomPainter {
         canvas.drawLine(Offset(x + w, centerY - h), Offset(x + w, centerY + h), paint..strokeWidth = 2);
         paint.strokeWidth = 4;
       } else {
-        paint.color = Colors.white.withOpacity(0.15);
+        paint.color = Colors.white.withOpacity(0.2);
         canvas.drawLine(Offset(x, centerY), Offset(x + w, centerY), paint..strokeWidth = 2);
         paint.strokeWidth = 4;
       }
@@ -398,5 +394,5 @@ class _WaveformPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _WaveformPainter old) => old.steps != steps;
+  bool shouldRepaint(covariant _SimpleWaveformPainter old) => old.steps != steps;
 }

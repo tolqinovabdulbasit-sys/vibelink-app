@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/vibration_pattern.dart';
 import 'relay_backend.dart';
@@ -21,6 +20,14 @@ class PeerService extends ChangeNotifier {
   Timer? _liveWatchdog;
   bool _isLive = false;
   DateTime? _lastPeerSeen;
+
+  // Delivery status tracking (100% honest ACK confirmation)
+  String _deliveryStatus = 'idle'; // 'idle', 'sending', 'delivered', 'failed'
+  String _lastDeliveredTime = '';
+  final Map<String, Timer> _ackTimeouts = {};
+
+  String get deliveryStatus => _deliveryStatus;
+  String get lastDeliveredTime => _lastDeliveredTime;
 
   static String getPairChannel(String id1, String id2) {
     final a = id1.trim().replaceAll(' ', '').toUpperCase();
@@ -43,7 +50,7 @@ class PeerService extends ChangeNotifier {
   Function(VibrationPattern)? onVibeReceived;
   Function()? onLiveStart;
   Function()? onLiveStop;
-  Function(String)? onAckReceived;
+  Function(String status, String timeStr)? onDeliveryStatusChanged;
   Function(String peerId, String name)? onPeerJoined;
   Function(String status)? onPeerStatusChanged;
   Function(String)? onError;
@@ -203,7 +210,16 @@ class PeerService extends ChangeNotifier {
 
       case 'ACK':
         final id = data['id'] as String? ?? '';
-        onAckReceived?.call(id);
+        if (id.isNotEmpty && _ackTimeouts.containsKey(id)) {
+          _ackTimeouts[id]?.cancel();
+          _ackTimeouts.remove(id);
+
+          final now = DateTime.now();
+          _lastDeliveredTime = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}";
+          _deliveryStatus = 'delivered';
+          notifyListeners();
+          onDeliveryStatusChanged?.call('delivered', _lastDeliveredTime);
+        }
         break;
     }
   }
@@ -220,7 +236,7 @@ class PeerService extends ChangeNotifier {
   }
 
   // ──────────────────────────────────────────────
-  // Publish — only through active backend
+  // Publish
   // ──────────────────────────────────────────────
 
   Future<void> _publish(Map<String, dynamic> data) async {
@@ -230,7 +246,7 @@ class PeerService extends ChangeNotifier {
   }
 
   // ──────────────────────────────────────────────
-  // Public API
+  // Public API with Honest ACK Confirmation
   // ──────────────────────────────────────────────
 
   void sendHello(String myName) {
@@ -239,8 +255,28 @@ class PeerService extends ChangeNotifier {
 
   void sendPattern(VibrationPattern pattern, String targetId) {
     final msgId = DateTime.now().millisecondsSinceEpoch.toString();
-    _publish({'type': 'VIBE', 'id': msgId, 'fromId': _myId, 'pattern': pattern.toJson()});
-    onAckReceived?.call('sent:$msgId');
+    
+    // Set status to sending
+    _deliveryStatus = 'sending';
+    notifyListeners();
+    onDeliveryStatusChanged?.call('sending', '');
+
+    // Set 3.5s timeout for ACK
+    _ackTimeouts[msgId] = Timer(const Duration(milliseconds: 3500), () {
+      _ackTimeouts.remove(msgId);
+      if (_deliveryStatus == 'sending') {
+        _deliveryStatus = 'failed';
+        notifyListeners();
+        onDeliveryStatusChanged?.call('failed', '');
+      }
+    });
+
+    _publish({
+      'type': 'VIBE',
+      'id': msgId,
+      'fromId': _myId,
+      'pattern': pattern.toJson(),
+    });
   }
 
   void sendLiveStart(String targetId) => _publish({'type': 'LIVE_START', 'fromId': _myId});
@@ -269,6 +305,9 @@ class PeerService extends ChangeNotifier {
 
   void setTarget(String peerId) {
     _targetPeerId = peerId.trim().toUpperCase();
+    if (_myId.isNotEmpty && _targetPeerId!.isNotEmpty) {
+      connectWithPeer(_targetPeerId!);
+    }
     notifyListeners();
   }
 
@@ -293,6 +332,10 @@ class PeerService extends ChangeNotifier {
     _pingTimer?.cancel();
     _reconnectTimer?.cancel();
     _liveWatchdog?.cancel();
+    for (final timer in _ackTimeouts.values) {
+      timer.cancel();
+    }
+    _ackTimeouts.clear();
     _backend?.disconnect();
     super.dispose();
   }

@@ -25,6 +25,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<RelayType, bool?> _testResults = {};
   RelayType? _testingType;
 
+  // Pattern visibility for Home Screen (Check / Uncheck)
+  List<String> _visiblePatternIds = [];
+
   @override
   void initState() {
     super.initState();
@@ -33,14 +36,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    final savedVisible = prefs.getStringList('home_visible_patterns');
     setState(() {
       _notifications = prefs.getBool('notifications_enabled') ?? true;
       _bgMode = prefs.getBool('bg_mode_enabled') ?? true;
       _selectedLang = prefs.getString('app_language') ?? 'Русский';
+      if (savedVisible != null && savedVisible.isNotEmpty) {
+        _visiblePatternIds = List<String>.from(savedVisible);
+      } else {
+        _visiblePatternIds = kBuiltinPresets.map((p) => p.id).toList();
+      }
     });
     if (_bgMode) {
       WakelockPlus.enable();
     }
+  }
+
+  Future<void> _togglePatternVisibility(String id) async {
+    setState(() {
+      if (_visiblePatternIds.contains(id)) {
+        if (_visiblePatternIds.length > 1) {
+          _visiblePatternIds.remove(id);
+        } else {
+          _showSnack('Kamida 1 ta tugma ko\'rinishi kerak!');
+          return;
+        }
+      } else {
+        _visiblePatternIds.add(id);
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('home_visible_patterns', _visiblePatternIds);
+    _showSnack('Bosh ekran tugmalari yangilandi');
   }
 
   Future<void> _toggleNotifications(bool val) async {
@@ -132,7 +159,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Icon(Icons.vibration_rounded, color: Color(0xFF6C63FF)),
             SizedBox(width: 8),
-            Text('VibeLink v1.1.0', style: TextStyle(color: Colors.white, fontSize: 18)),
+            Text('VibeLink v2.1.0 (st01)', style: TextStyle(color: Colors.white, fontSize: 18)),
           ],
         ),
         content: Column(
@@ -141,11 +168,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             const Text('Real-Vaqtli Masofaviy Vibratsiya Boshqaruv Tizimi', style: TextStyle(color: Colors.white70, fontSize: 13)),
             const SizedBox(height: 12),
-            Text('• 3 xil transport backend (WSS / Stream / Poll)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
-            Text('• Port 443 (HTTPS) — hech qachon bloklanmaydi', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
-            Text('• 10 ta o\'rnatilgan vibro-signal', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
-            Text('• Shaxsiy Pattern Studio', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
-            Text('• 0ms javob beruvchi Live Touch', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• 100% Haqiqiy ACK confirmation (Soxta xabarsiz)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• Sodda 3-slayderli Pattern Studio', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• Bosh ekran tugmalarini sozlash (Check/Uncheck)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• Fon rejimi va ekran blokirovkasi mosligi', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
           ],
         ),
         actions: [
@@ -199,9 +225,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF12122A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Qurilmani o'chirish", style: TextStyle(color: Colors.white, fontSize: 17)),
-        content: Text('$name ni juftlangan ro\'yxatdan o\'chirmoqchimisiz?',
-          style: TextStyle(color: Colors.white.withOpacity(0.7))),
+        title: Text('$name ni o\'chirish', style: const TextStyle(color: Colors.white, fontSize: 17)),
+        content: const Text('Ushbu qurilma ro\'yxatdan o\'chiriladi. Ishonchingiz komilmi?', style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: Text('Bekor', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
           TextButton(
@@ -209,7 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               context.read<DeviceService>().removeDevice(id);
               Navigator.pop(context);
             },
-            child: const Text("O'chirish", style: TextStyle(color: Color(0xFFEF4444))),
+            child: const Text('O\'chirish', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -221,26 +246,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final peerService = context.read<PeerService>();
     final devService = context.read<DeviceService>();
 
-    // Test on this phone immediately
     vibeService.playPattern(pattern);
-    HapticFeedback.mediumImpact();
 
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      backgroundColor: const Color(0xFF12122A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => Container(
-        padding: const EdgeInsets.all(20),
-        child: Column(
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF12122A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Text(pattern.icon, style: const TextStyle(fontSize: 22)),
+            const SizedBox(width: 10),
+            Expanded(child: Text(pattern.name, style: const TextStyle(color: Colors.white, fontSize: 16))),
+          ],
+        ),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(pattern.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white)),
-            const SizedBox(height: 8),
-            Text('Telefoningizda sinovdan o\'tkazildi! Sherik qurilmaga yuborilsinmi?',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 13)),
+            Text(pattern.description, style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
             const SizedBox(height: 18),
             Row(
               children: [
@@ -248,7 +271,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: OutlinedButton.icon(
                     onPressed: () => vibeService.playPattern(pattern),
                     icon: const Icon(Icons.replay_rounded, size: 16),
-                    label: const Text('Qayta sinash'),
+                    label: const Text('Sinash'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
                       side: BorderSide(color: Colors.white.withOpacity(0.2)),
@@ -288,16 +311,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ──────────────────────────────────────────────
-  // Switch transport backend
-  // ──────────────────────────────────────────────
-
   Future<void> _switchTransport(RelayType type) async {
     final ps = context.read<PeerService>();
     setState(() => _testingType = type);
-    
     await ps.switchBackend(type);
-    
     setState(() => _testingType = null);
     _showSnack('${type.label} ga almashtirildi!');
   }
@@ -305,7 +322,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _testTransport(RelayType type) async {
     setState(() {
       _testingType = type;
-      _testResults[type] = null; // null = testing
+      _testResults[type] = null;
     });
 
     final ps = context.read<PeerService>();
@@ -339,9 +356,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 18),
 
-            // ═══════════════════════════════════════
             // 🔥 TRANSPORT BACKEND SWITCHER
-            // ═══════════════════════════════════════
             const Text('🚀 Transport (Ulanish turi)',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
             const SizedBox(height: 4),
@@ -365,7 +380,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
                 TextButton.icon(
                   onPressed: () {
-                    widget.onNavigateTab?.call(1); // Switch to Pairing Tab
+                    widget.onNavigateTab?.call(1);
                   },
                   icon: const Icon(Icons.add_rounded, size: 18, color: Color(0xFF6C63FF)),
                   label: const Text('Qo\'shish', style: TextStyle(color: Color(0xFF6C63FF), fontWeight: FontWeight.w600)),
@@ -393,16 +408,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 20),
 
-            // 10 Vibration types
-            const Text('Vibratsiya Tiplari (10 ta)',
+            // 📌 HOME SCREEN BUTTONS CUSTOMIZER (Check/Uncheck)
+            const Text('📌 Bosh Ekran Tugmalari (Boshqarish)',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+            const SizedBox(height: 4),
+            Text('Bosh ekranda ko\'rinadigan tugmalarni belgilang (Check/Uncheck):',
+              style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.5))),
             const SizedBox(height: 10),
-            ...kBuiltinPresets.asMap().entries.map((e) => _VibTypeTile(
-              num: e.key + 1,
-              pattern: e.value,
-              onTap: () => _testOrSendPreset(e.value),
-            )),
-
+            ...kBuiltinPresets.map((p) {
+              final isChecked = _visiblePatternIds.contains(p.id);
+              final color = Color(int.parse(p.colorHex.replaceFirst('#', '0xFF')));
+              return CheckboxListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                dense: true,
+                value: isChecked,
+                activeColor: const Color(0xFF6C63FF),
+                checkColor: Colors.white,
+                tileColor: const Color(0xFF12122A),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                title: Row(
+                  children: [
+                    Text(p.icon, style: const TextStyle(fontSize: 16)),
+                    const SizedBox(width: 8),
+                    Text(p.name, style: TextStyle(color: isChecked ? Colors.white : Colors.white54, fontSize: 13, fontWeight: isChecked ? FontWeight.w600 : FontWeight.w400)),
+                  ],
+                ),
+                onChanged: (_) => _togglePatternVisibility(p.id),
+              );
+            }),
             const SizedBox(height: 20),
 
             // App settings
@@ -439,7 +472,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SettingsTile(
               icon: 'ℹ️',
               title: 'Versiya',
-              subtitle: 'VibeLink v1.1.0',
+              subtitle: 'VibeLink v2.1.0 (st01)',
               onTap: _showVersionDialog,
               trailing: Icon(Icons.chevron_right_rounded, color: Colors.white.withOpacity(0.3)),
             ),
@@ -450,24 +483,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ──────────────────────────────────────────────
-  // Transport tile with test button
-  // ──────────────────────────────────────────────
-
   Widget _buildTransportTile(RelayType type, bool isActive) {
     final testResult = _testResults[type];
     final isTesting = _testingType == type;
 
-    // Icon
     IconData iconData;
     switch (type) {
-      
       case RelayType.cloudPubNub: iconData = Icons.cloud_done_rounded; break;
-      case RelayType.localP2p: iconData = Icons.wifi_tethering_rounded; break;
-      case RelayType.httpPoll:   iconData = Icons.sync_rounded; break;
+      case RelayType.localP2p:     iconData = Icons.wifi_tethering_rounded; break;
+      case RelayType.httpPoll:     iconData = Icons.sync_rounded; break;
     }
 
-    // Border/accent color
     Color accentColor;
     if (isActive) {
       accentColor = const Color(0xFF6C63FF);
@@ -491,7 +517,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         child: Row(
           children: [
-            // Icon
             Container(
               width: 36, height: 36,
               decoration: BoxDecoration(
@@ -501,7 +526,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Icon(iconData, color: isActive ? const Color(0xFF6C63FF) : Colors.white54, size: 18),
             ),
             const SizedBox(width: 12),
-            // Text
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -522,7 +546,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
-            // Test button
             GestureDetector(
               onTap: () => _testTransport(type),
               child: Container(
@@ -530,44 +553,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.06),
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withOpacity(0.1)),
                 ),
                 child: isTesting
                     ? const SizedBox(
-                        width: 14, height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6C63FF)),
+                        width: 12, height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white),
                       )
-                    : Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (testResult == true)
-                            const Icon(Icons.check_circle, color: Color(0xFF22C55E), size: 14)
-                          else if (testResult == false)
-                            const Icon(Icons.cancel, color: Color(0xFFEF4444), size: 14)
-                          else
-                            const Icon(Icons.speed_rounded, color: Colors.white54, size: 14),
-                          const SizedBox(width: 4),
-                          Text(
-                            testResult == true ? 'OK' : testResult == false ? 'Xato' : 'Test',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: testResult == true
-                                  ? const Color(0xFF22C55E)
-                                  : testResult == false
-                                      ? const Color(0xFFEF4444)
-                                      : Colors.white54,
-                            ),
-                          ),
-                        ],
+                    : Text(
+                        testResult == true ? '🟢 OK' : (testResult == false ? '🔴 Xato' : 'Test'),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: testResult == true ? const Color(0xFF22C55E) : (testResult == false ? const Color(0xFFEF4444) : Colors.white70),
+                        ),
                       ),
               ),
             ),
-            const SizedBox(width: 6),
-            // Active checkmark
-            if (isActive)
-              const Icon(Icons.check_circle_rounded, color: Color(0xFF6C63FF), size: 20)
-            else
-              Icon(Icons.radio_button_off_rounded, color: Colors.white.withOpacity(0.2), size: 20),
           ],
         ),
       ),
@@ -697,45 +699,6 @@ class _DeviceTile extends StatelessWidget {
               ),
             IconButton(onPressed: onRename, icon: Icon(Icons.edit_rounded, color: Colors.white.withOpacity(0.4), size: 17)),
             IconButton(onPressed: onDelete, icon: Icon(Icons.delete_outline_rounded, color: const Color(0xFFEF4444).withOpacity(0.6), size: 17)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _VibTypeTile extends StatelessWidget {
-  final int num;
-  final VibrationPattern pattern;
-  final VoidCallback onTap;
-  const _VibTypeTile({required this.num, required this.pattern, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Color(int.parse(pattern.colorHex.replaceFirst('#', '0xFF')));
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF12122A),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 26, height: 26,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: color.withOpacity(0.15)),
-              alignment: Alignment.center,
-              child: Text('$num', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
-            ),
-            const SizedBox(width: 12),
-            Text(pattern.icon, style: TextStyle(color: color, fontSize: 13, fontFamily: 'JetBrains Mono', fontWeight: FontWeight.w700)),
-            const SizedBox(width: 12),
-            Expanded(child: Text(pattern.name, style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 13))),
-            Icon(Icons.play_circle_fill_rounded, color: color.withOpacity(0.7), size: 20),
           ],
         ),
       ),
