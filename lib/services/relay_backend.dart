@@ -192,7 +192,7 @@ class LocalP2pBackend extends RelayBackend {
       _server!.listen((HttpRequest request) async {
         if (request.method == 'POST' && request.uri.path == '/message') {
           try {
-            final body = await utf8.decoder.bind(request.body).join();
+            final body = await utf8.decoder.bind(request).join();
             final data = jsonDecode(body) as Map<String, dynamic>;
             onMessage?.call(data);
             request.response.statusCode = HttpStatus.ok;
