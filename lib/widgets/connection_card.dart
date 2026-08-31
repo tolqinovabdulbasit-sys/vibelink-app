@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/device_service.dart';
 import '../services/peer_service.dart';
+import '../services/relay_backend.dart';
 
 class ConnectionCard extends StatelessWidget {
   const ConnectionCard({super.key});

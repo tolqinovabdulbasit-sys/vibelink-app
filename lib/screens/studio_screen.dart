@@ -66,7 +66,7 @@ class _StudioScreenState extends State<StudioScreen> {
     final ps = context.read<PeerService>();
     final active = ds.activeDevice;
     if (active == null) { _showSnack('Qurilma tanlanmagan'); return; }
-    await ps.sendPattern(pattern, active.id);
+    ps.sendPattern(pattern, active.id);
     _showSnack('Yuborildi!');
   }
 
