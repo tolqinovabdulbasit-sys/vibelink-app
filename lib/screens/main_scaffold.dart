@@ -63,7 +63,7 @@ class _MainScaffoldState extends State<MainScaffold> with WidgetsBindingObserver
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
-              mainAxisAlignment: Main.spaceAround,
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _NavItem(icon: Icons.home_rounded, label: 'Главная', index: 0, current: _currentIndex, onTap: (i) => setState(() => _currentIndex = i)),
                 _NavItem(icon: Icons.devices_rounded, label: 'Устройства', index: 1, current: _currentIndex, onTap: (i) => setState(() => _currentIndex = i)),
