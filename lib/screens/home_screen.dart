@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
 import '../services/device_service.dart';
 import '../services/vibration_service.dart';
 import '../services/peer_service.dart';
