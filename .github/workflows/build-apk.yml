@@ -1,0 +1,140 @@
+name: 🚀 Build & Release VibeLink APK
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release versiyasi (masalan: 1.0.1)'
+        required: false
+        default: '1.0.0'
+
+env:
+  FLUTTER_VERSION: '3.22.3'
+  JAVA_VERSION: '17'
+
+jobs:
+  build-apk:
+    name: 📱 APK Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # 1. Kod olish
+      - name: 📥 Checkout kodi
+        uses: actions/checkout@v4
+
+      # 2. Java sozlash
+      - name: ☕ Java ${{ env.JAVA_VERSION }} sozlash
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+
+      # 3. Flutter sozlash
+      - name: 🐦 Flutter ${{ env.FLUTTER_VERSION }} sozlash
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      # 4. Dependencies
+      - name: 📦 Flutter pub get
+        run: flutter pub get
+
+      # 5. Keystore yaratish (agar secret mavjud bo'lsa)
+      - name: 🔑 Keystore sozlash
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/keystore.jks
+          cat > android/key.properties << EOF
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=keystore.jks
+          EOF
+
+      # 6. APK build (debug - keystore bo'lmasa)
+      - name: 🔨 Debug APK yaratish
+        if: ${{ secrets.KEYSTORE_BASE64 == '' }}
+        run: |
+          flutter build apk --debug \
+            --build-name="${{ github.event.inputs.version || '1.0.0' }}" \
+            --build-number="${{ github.run_number }}"
+
+      # 7. APK build (release - keystore bor)
+      - name: 🔨 Release APK yaratish
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          flutter build apk --release \
+            --build-name="${{ github.event.inputs.version || '1.0.0' }}" \
+            --build-number="${{ github.run_number }}"
+
+      # 8. APK nomini belgilash
+      - name: 📝 APK nomini o'zgartirish
+        run: |
+          MODE=${{ secrets.KEYSTORE_BASE64 != '' && 'release' || 'debug' }}
+          mkdir -p artifacts
+          cp build/app/outputs/flutter-apk/app-${MODE}.apk \
+             artifacts/VibeLink-v${{ github.event.inputs.version || '1.0.0' }}-build${{ github.run_number }}.apk
+          echo "APK_PATH=artifacts/VibeLink-v${{ github.event.inputs.version || '1.0.0' }}-build${{ github.run_number }}.apk" >> $GITHUB_ENV
+          echo "APK_NAME=VibeLink-v${{ github.event.inputs.version || '1.0.0' }}-build${{ github.run_number }}.apk" >> $GITHUB_ENV
+
+      # 9. APK ni artifact sifatida saqlash
+      - name: 📤 APK ni yuklash (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: VibeLink-APK-${{ github.run_number }}
+          path: ${{ env.APK_PATH }}
+          retention-days: 90
+
+      # 10. GitHub Release yaratish (tag bo'lganda)
+      - name: 🏷️ GitHub Release yaratish
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "VibeLink ${{ github.ref_name }}"
+          body: |
+            ## 📱 VibeLink ${{ github.ref_name }}
+
+            ### 🆕 Yangiliklar
+            - Real-vaqtli vibratsiya boshqaruvi
+            - P2P ulanish (WebSocket signaling)
+            - 8 ta tayyor vibro-pattern
+            - Pattern Studio (shaxsiy patternlar)
+            - Qurilmalar boshqaruvi
+
+            ### 📥 Yuklab olish
+            Quyidagi APK faylini yuklab oling va o'rnating:
+            > ⚠️ O'rnatish oldidan: Sozlamalar → Xavfsizlik → Noma'lum manbalardan o'rnatishga ruxsat bering
+
+            ### 📋 Talablar
+            - Android 5.0 (API 21) va undan yuqori
+            - Vibratsiya dvigateli bo'lgan qurilma
+            - Internet ulanish
+
+            **Build:** #${{ github.run_number }}
+          files: ${{ env.APK_PATH }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 11. Build summary
+      - name: 📊 Build natijasi
+        run: |
+          echo "## ✅ APK muvaffaqiyatli qurildi!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Ma'lumot | Qiymat |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 Fayl | ${{ env.APK_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔢 Build | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🐦 Flutter | ${{ env.FLUTTER_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📅 Sana | $(date '+%Y-%m-%d %H:%M') |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 APK yuklab olish" >> $GITHUB_STEP_SUMMARY
+          echo "Actions → Bu workflow → Artifacts → VibeLink-APK-${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          ls -lh artifacts/
