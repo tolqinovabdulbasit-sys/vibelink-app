@@ -25,6 +25,7 @@ class VibrationStep {
 class VibrationPattern {
   final String id;
   String name;
+  final String description;
   final List<VibrationStep> steps;
   final String colorHex;
   final String icon;
@@ -32,14 +33,18 @@ class VibrationPattern {
   VibrationPattern({
     required this.id,
     required this.name,
+    this.description = '',
     required this.steps,
     this.colorHex = '#6C63FF',
     this.icon = '📳',
   });
 
+  int get totalDurationMs => steps.fold(0, (sum, s) => sum + s.durationMs);
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
+    'description': description,
     'steps': steps.map((s) => s.toJson()).toList(),
     'colorHex': colorHex,
     'icon': icon,
@@ -48,6 +53,7 @@ class VibrationPattern {
   factory VibrationPattern.fromJson(Map<String, dynamic> json) => VibrationPattern(
     id: json['id'] ?? '',
     name: json['name'] ?? 'Signal',
+    description: json['description'] ?? '',
     steps: (json['steps'] as List? ?? []).map((s) => VibrationStep.fromJson(s)).toList(),
     colorHex: json['colorHex'] ?? '#6C63FF',
     icon: json['icon'] ?? '📳',
@@ -87,6 +93,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'two-short',
     name: '01 Ikki qisqa',
+    description: '2 ta qisqa puls',
     icon: '• –',
     colorHex: '#3B82F6',
     steps: [
@@ -98,6 +105,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'three-short',
     name: '02 Uch qisqa',
+    description: '3 ta qisqa puls',
     icon: '•••',
     colorHex: '#A855F7',
     steps: [
@@ -111,6 +119,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'long',
     name: '03 Uzun',
+    description: '1 ta uzun puls',
     icon: '———',
     colorHex: '#F97316',
     steps: [
@@ -120,6 +129,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'long-short',
     name: '04 Uzun + qisqa',
+    description: '1 ta uzun va 1 ta qisqa puls',
     icon: '— •',
     colorHex: '#22C55E',
     steps: [
@@ -131,6 +141,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'short-short',
     name: '05 Qisqa + qisqa',
+    description: '2 ta tezkor qisqa puls',
     icon: '• •',
     colorHex: '#EAB308',
     steps: [
@@ -142,6 +153,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'short-long',
     name: '06 Qisqa + uzun',
+    description: '1 ta qisqa va 1 ta kuchli uzun puls',
     icon: '• —',
     colorHex: '#06B6D4',
     steps: [
@@ -153,6 +165,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'long-long',
     name: '07 Uzun + uzun',
+    description: '2 ta ketma-ket uzun puls',
     icon: '— —',
     colorHex: '#EF4444',
     steps: [
@@ -164,6 +177,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'three-short-long',
     name: '08 Uch qisqa + uzun',
+    description: '3 ta qisqa va yakuniy uzun puls',
     icon: '••• —',
     colorHex: '#EC4899',
     steps: [
@@ -179,6 +193,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'short-series',
     name: '09 Qisqa (seriya)',
+    description: '6 ta qisqa maromli pulslar seriyasi',
     icon: '••••',
     colorHex: '#6366F1',
     steps: [
@@ -191,6 +206,7 @@ final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(
     id: 'long-series',
     name: '10 Uzun (seriya)',
+    description: 'Seriyali kuchli tebranishlar',
     icon: '—— —',
     colorHex: '#F59E0B',
     steps: [

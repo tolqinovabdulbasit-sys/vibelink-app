@@ -10,13 +10,20 @@ class VibrationService extends ChangeNotifier {
   Timer? _liveTimer;
   VibrationPattern? _currentPattern;
   final List<VibrationHistory> _history = [];
+  final List<VibrationPattern> _customPatterns = [];
 
   bool get isVibrating => _isVibrating;
   List<VibrationHistory> get history => List.unmodifiable(_history);
+  List<VibrationPattern> get customPatterns => List.unmodifiable(_customPatterns);
   VibrationPattern? get currentPattern => _currentPattern;
 
   VibrationService() {
-    _loadHistory();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadHistory();
+    await _loadCustomPatterns();
   }
 
   Future<void> _loadHistory() async {
@@ -42,6 +49,42 @@ class VibrationService extends ChangeNotifier {
     }
   }
 
+  Future<void> _loadCustomPatterns() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('custom_vibration_patterns') ?? '[]';
+      final list = jsonDecode(raw) as List;
+      _customPatterns.clear();
+      _customPatterns.addAll(list.map((e) => VibrationPattern.fromJson(e)).toList());
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error loading custom patterns: $e');
+    }
+  }
+
+  Future<void> _saveCustomPatterns() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(_customPatterns.map((e) => e.toJson()).toList());
+      await prefs.setString('custom_vibration_patterns', encoded);
+    } catch (e) {
+      debugPrint('Error saving custom patterns: $e');
+    }
+  }
+
+  Future<void> saveCustomPattern(VibrationPattern pattern) async {
+    _customPatterns.removeWhere((p) => p.id == pattern.id);
+    _customPatterns.insert(0, pattern);
+    await _saveCustomPatterns();
+    notifyListeners();
+  }
+
+  Future<void> deleteCustomPattern(String id) async {
+    _customPatterns.removeWhere((p) => p.id == id);
+    await _saveCustomPatterns();
+    notifyListeners();
+  }
+
   Future<void> clearHistory() async {
     _history.clear();
     await _saveHistory();
@@ -53,6 +96,10 @@ class VibrationService extends ChangeNotifier {
     return hasVib ?? false;
   }
 
+  Future<void> playPatternLocally(VibrationPattern pattern) async {
+    await playPattern(pattern, deviceName: 'Lokal Sinov');
+  }
+
   Future<void> playPattern(VibrationPattern pattern, {String deviceName = ''}) async {
     try { await Vibration.cancel(); } catch (_) {}
     _isVibrating = true;
@@ -60,7 +107,7 @@ class VibrationService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      List<int> vib = [0]; // Initial delay 0ms
+      List<int> vib = [0];
       List<int> amp = [0];
       for (final step in pattern.steps) {
         if (step.type == 'pause') {
@@ -75,7 +122,6 @@ class VibrationService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Vibration error: $e');
       try {
-        // Fallback simple vibration
         int total = pattern.steps.fold(0, (sum, s) => sum + (s.type == 'vibrate' ? s.durationMs : 0));
         await Vibration.vibrate(duration: total > 0 ? total : 300);
       } catch (_) {}
@@ -87,7 +133,6 @@ class VibrationService extends ChangeNotifier {
       notifyListeners();
     });
 
-    // Add to history
     _history.insert(0, VibrationHistory(
       patternName: pattern.name,
       deviceName: deviceName.isEmpty ? 'Sherik' : deviceName,
@@ -103,7 +148,6 @@ class VibrationService extends ChangeNotifier {
     if (_isVibrating) return;
     _isVibrating = true;
     notifyListeners();
-    // Continuous vibration burst
     Vibration.vibrate(duration: 500, amplitude: 255);
     _liveTimer?.cancel();
     _liveTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
