@@ -16,9 +16,8 @@ class _PairingScreenState extends State<PairingScreen> {
   bool _showCode = true;
   Timer? _timer;
   Duration _remaining = Duration.zero;
-  final List<TextEditingController> _ctrls = List.generate(8, (_) => TextEditingController());
-  final List<FocusNode> _focuses = List.generate(8, (_) => FocusNode());
-  final _nameCtrl = TextEditingController();
+  final _codeController = TextEditingController();
+  final _nameController = TextEditingController();
   bool _connecting = false;
   String? _errorMsg;
 
@@ -34,26 +33,20 @@ class _PairingScreenState extends State<PairingScreen> {
     final ds = context.read<DeviceService>();
     final ps = context.read<PeerService>();
 
+    // Generate 6-digit simple PIN
     ds.generatePairingCode();
-    ps.listenToPairCode(ds.currentCode);
+    ps.joinChannel(ds.currentCode);
     _startTimer(ds);
 
-    // Listen for incoming pairing on code generator phone
-    ps.onPairRequestReceived = (peerId, name) async {
-      final device = await ds.addDevice(peerId: peerId, name: name);
+    // When partner phone joins
+    ps.onPeerJoined = (peerId, name) async {
+      final device = await ds.addDevice(
+        peerId: peerId.isNotEmpty ? peerId : ds.currentCode,
+        name: name.isNotEmpty ? name : 'Sherik Telefon',
+      );
       ps.setTarget(device.id);
       if (mounted) {
-        _showSuccessDialog("${device.name} muvaffaqiyatli ulandi!");
-      }
-    };
-
-    // Listen for accepted pairing on code enterer phone
-    ps.onPairAccepted = (peerId, name) async {
-      setState(() => _connecting = false);
-      final customName = _nameCtrl.text.trim().isNotEmpty ? _nameCtrl.text.trim() : name;
-      final device = await ds.addDevice(peerId: peerId, name: customName);
-      ps.setTarget(device.id);
-      if (mounted) {
+        setState(() => _connecting = false);
         _showSuccessDialog("${device.name} bilan ulanish o'rnatildi!");
       }
     };
@@ -63,9 +56,9 @@ class _PairingScreenState extends State<PairingScreen> {
     final ds = context.read<DeviceService>();
     final ps = context.read<PeerService>();
     ds.generatePairingCode();
-    ps.listenToPairCode(ds.currentCode);
+    ps.joinChannel(ds.currentCode);
     _startTimer(ds);
-    _showToast('Yangi ulanish kodi yaratildi');
+    _showToast('Yangi PIN kod: ${ds.currentCode}');
   }
 
   void _startTimer(DeviceService ds) {
@@ -87,11 +80,12 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _connect() async {
-    final code = _ctrls.map((c) => c.text.trim()).join().toUpperCase();
-    if (code.length < 8) {
-      setState(() => _errorMsg = '8 xonali to\'liq kodni kiriting');
+    final code = _codeController.text.trim().replaceAll(' ', '').toUpperCase();
+    if (code.isEmpty) {
+      setState(() => _errorMsg = 'Kodni kiriting');
       return;
     }
+
     setState(() {
       _connecting = true;
       _errorMsg = null;
@@ -99,18 +93,21 @@ class _PairingScreenState extends State<PairingScreen> {
 
     final ds = context.read<DeviceService>();
     final ps = context.read<PeerService>();
-    final myName = _nameCtrl.text.trim().isEmpty ? ds.myDeviceName : _nameCtrl.text.trim();
+    final myName = _nameController.text.trim().isEmpty ? ds.myDeviceName : _nameController.text.trim();
 
-    // Send pairing request via MQTT channel
-    await ps.sendPairRequest(code, myName);
+    // Join the room and announce presence
+    await ps.joinChannel(code);
+    ps.sendHello(myName);
 
-    // Timeout if no response after 8 seconds
-    Future.delayed(const Duration(seconds: 8), () {
-      if (mounted && _connecting) {
-        setState(() {
-          _connecting = false;
-          _errorMsg = 'Timeout: Sherik telefon topilmadi. Kod to\'g\'riligini tekshiring.';
-        });
+    // Save device directly into paired list
+    final device = await ds.addDevice(peerId: code, name: myName);
+    ps.setTarget(device.id);
+
+    // Give 1 second for handshake
+    Future.delayed(const Duration(milliseconds: 1200), () {
+      if (mounted) {
+        setState(() => _connecting = false);
+        _showSuccessDialog("Ulanish muvaffaqiyatli saqlandi!");
       }
     });
   }
@@ -125,10 +122,13 @@ class _PairingScreenState extends State<PairingScreen> {
           children: [
             Icon(Icons.check_circle_rounded, color: Color(0xFF22C55E), size: 28),
             SizedBox(width: 10),
-            Text('Muvaffaqiyatli!', style: TextStyle(color: Colors.white, fontSize: 18)),
+            Text('Ulandi!', style: TextStyle(color: Colors.white, fontSize: 18)),
           ],
         ),
-        content: Text(message, style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 14)),
+        content: Text(
+          message,
+          style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 14),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -154,9 +154,8 @@ class _PairingScreenState extends State<PairingScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    for (final c in _ctrls) c.dispose();
-    for (final f in _focuses) f.dispose();
-    _nameCtrl.dispose();
+    _codeController.dispose();
+    _nameController.dispose();
     super.dispose();
   }
 
@@ -197,8 +196,22 @@ class _PairingScreenState extends State<PairingScreen> {
     ),
     child: Row(
       children: [
-        _TabBtn(label: "Kodni Ko'rsat", icon: Icons.visibility_rounded, active: _showCode, onTap: () => setState(() => _showCode = true)),
-        _TabBtn(label: 'Kodni Kirit', icon: Icons.keyboard_rounded, active: !_showCode, onTap: () => setState(() => _showCode = false)),
+        _TabBtn(
+          label: "Kodni Ko'rsat",
+          icon: Icons.visibility_rounded,
+          active: _showCode,
+          onTap: () {
+            setState(() => _showCode = true);
+            final ds = context.read<DeviceService>();
+            context.read<PeerService>().joinChannel(ds.currentCode);
+          },
+        ),
+        _TabBtn(
+          label: 'Kodni Kirit',
+          icon: Icons.keyboard_rounded,
+          active: !_showCode,
+          onTap: () => setState(() => _showCode = false),
+        ),
       ],
     ),
   );
@@ -206,6 +219,7 @@ class _PairingScreenState extends State<PairingScreen> {
   Widget _buildShowCode() {
     final ds = context.watch<DeviceService>();
     final code = ds.currentCode;
+
     return Column(
       children: [
         const SizedBox(height: 12),
@@ -215,25 +229,34 @@ class _PairingScreenState extends State<PairingScreen> {
           decoration: BoxDecoration(
             color: const Color(0xFF12122A),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.25), width: 1.5),
+            border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.3), width: 1.5),
           ),
           child: Column(
             children: [
-              Text('Bir martalik ulanish kodi',
-                style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.55))),
+              Text('Ulanish PIN kodi',
+                style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.6))),
               const SizedBox(height: 14),
-              // Code display with letter boxes
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ...code.characters.take(4).map((c) => _CodeBox(char: c)),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Text('–', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 20)),
+
+              // Large, super readable PIN code (e.g. 583 291)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6C63FF).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.4)),
+                ),
+                child: Text(
+                  code.length >= 6 ? '${code.substring(0, 3)}  ${code.substring(3)}' : code,
+                  style: const TextStyle(
+                    fontFamily: 'JetBrains Mono',
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 4,
+                    color: Color(0xFF00D4FF),
                   ),
-                  ...code.characters.skip(4).map((c) => _CodeBox(char: c)),
-                ],
+                ),
               ),
+
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -246,11 +269,12 @@ class _PairingScreenState extends State<PairingScreen> {
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                       fontFamily: 'JetBrains Mono',
-                      color: _remaining.inSeconds < 60 ? const Color(0xFFEF4444) : const Color(0xFF00D4FF),
+                      color: _remaining.inSeconds < 60 ? const Color(0xFFEF4444) : const Color(0xFF22C55E),
                     )),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
+
               // QR Code
               Container(
                 padding: const EdgeInsets.all(12),
@@ -259,11 +283,11 @@ class _PairingScreenState extends State<PairingScreen> {
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: code.isEmpty
-                    ? const SizedBox(width: 150, height: 150)
+                    ? const SizedBox(width: 140, height: 140)
                     : QrImageView(
                         data: code,
                         version: QrVersions.auto,
-                        size: 150,
+                        size: 140,
                       ),
               ),
               const SizedBox(height: 18),
@@ -273,7 +297,7 @@ class _PairingScreenState extends State<PairingScreen> {
                     child: OutlinedButton.icon(
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: code));
-                        _showToast("Kod nusxalandi: $code");
+                        _showToast("PIN nusxalandi: $code");
                       },
                       icon: const Icon(Icons.copy_rounded, size: 16),
                       label: const Text('Nusxalash'),
@@ -290,10 +314,10 @@ class _PairingScreenState extends State<PairingScreen> {
                     child: ElevatedButton.icon(
                       onPressed: _generateNewCode,
                       icon: const Icon(Icons.refresh_rounded, size: 16),
-                      label: const Text('Yangi Kod'),
+                      label: const Text('Yangi PIN'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF6C63FF).withOpacity(0.2),
-                        foregroundColor: const Color(0xFF6C63FF),
+                        backgroundColor: const Color(0xFF6C63FF),
+                        foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
@@ -304,7 +328,7 @@ class _PairingScreenState extends State<PairingScreen> {
             ],
           ),
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 16),
         _buildInstructions(),
       ],
     );
@@ -319,11 +343,11 @@ class _PairingScreenState extends State<PairingScreen> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text("Ko'rsatma:", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white.withOpacity(0.9))),
+        Text("Ulanish juda oson:", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white.withOpacity(0.9))),
         const SizedBox(height: 8),
-        _InstrStep(num: 1, text: '2-telefonda VibeLink oching'),
-        _InstrStep(num: 2, text: '"Kodni Kirit" bo\'limiga o\'ting'),
-        _InstrStep(num: 3, text: 'Yuqoridagi 8 xonali kodni kiriting va "Ulanish"ni bosing'),
+        _InstrStep(num: 1, text: '2-telefonda "Kodni Kirit" bo\'limiga o\'ting'),
+        _InstrStep(num: 2, text: 'Yuqoridagi PIN kodni kiriting (yoki nusxalab yuboring)'),
+        _InstrStep(num: 3, text: '"Ulanish" tugmasini bosing — tayyor!'),
       ],
     ),
   );
@@ -342,41 +366,53 @@ class _PairingScreenState extends State<PairingScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('8 xonali kodni kiriting',
-                style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.55))),
-              const SizedBox(height: 16),
-              // 8 input boxes
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ...List.generate(4, (i) => _SingleInput(
-                    ctrl: _ctrls[i],
-                    focus: _focuses[i],
-                    next: i < 7 ? _focuses[i + 1] : null,
-                    prev: i > 0 ? _focuses[i - 1] : null,
-                  )),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text('–', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 20)),
+              Text('PIN kodni yoki xona nomini kiriting',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.8))),
+              const SizedBox(height: 12),
+
+              // Super clean, large, robust text field with zero overflow issues
+              TextField(
+                controller: _codeController,
+                textAlign: TextAlign.center,
+                textCapitalization: TextCapitalization.characters,
+                style: const TextStyle(
+                  fontFamily: 'JetBrains Mono',
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF00D4FF),
+                  letterSpacing: 3,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Masalan: 482195',
+                  hintStyle: TextStyle(
+                    color: Colors.white.withOpacity(0.2),
+                    fontSize: 18,
+                    letterSpacing: 1,
                   ),
-                  ...List.generate(4, (i) => _SingleInput(
-                    ctrl: _ctrls[i + 4],
-                    focus: _focuses[i + 4],
-                    next: i + 4 < 7 ? _focuses[i + 5] : null,
-                    prev: _focuses[i + 3],
-                  )),
-                ],
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.06),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 16),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFF6C63FF), width: 2),
+                  ),
+                ),
               ),
-              const SizedBox(height: 18),
-              Text('Qurilma nomi (ixtiyoriy)',
+
+              const SizedBox(height: 16),
+              Text('Sherik telefon nomi (ixtiyoriy)',
                 style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.55))),
               const SizedBox(height: 8),
               TextField(
-                controller: _nameCtrl,
+                controller: _nameController,
                 maxLength: 20,
                 style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(
-                  hintText: 'Masalan: Telefon 2',
+                  hintText: 'Masalan: 2-Telefonim 📱',
                   hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
                   filled: true,
                   fillColor: Colors.white.withOpacity(0.06),
@@ -387,6 +423,7 @@ class _PairingScreenState extends State<PairingScreen> {
                   counterText: '',
                 ),
               ),
+
               if (_errorMsg != null) ...[
                 const SizedBox(height: 12),
                 Container(
@@ -405,6 +442,7 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                 ),
               ],
+
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
@@ -412,13 +450,13 @@ class _PairingScreenState extends State<PairingScreen> {
                   onPressed: _connecting ? null : _connect,
                   icon: _connecting
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.link_rounded, size: 18),
-                  label: Text(_connecting ? 'Ulanmoqda...' : 'Ulanish va Saqlash'),
+                      : const Icon(Icons.link_rounded, size: 20),
+                  label: Text(_connecting ? 'Ulanmoqda...' : 'Ulanish va Saqlash', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF6C63FF),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     disabledBackgroundColor: const Color(0xFF6C63FF).withOpacity(0.5),
                   ),
                 ),
@@ -437,6 +475,7 @@ class _TabBtn extends StatelessWidget {
   final bool active;
   final VoidCallback onTap;
   const _TabBtn({required this.label, required this.icon, required this.active, required this.onTap});
+
   @override
   Widget build(BuildContext context) => Expanded(
     child: GestureDetector(
@@ -451,68 +490,13 @@ class _TabBtn extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 15, color: active ? Colors.white : Colors.white54),
+            Icon(icon, size: 16, color: active ? Colors.white : Colors.white54),
             const SizedBox(width: 6),
-            Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+            Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
               color: active ? Colors.white : Colors.white54)),
           ],
         ),
       ),
-    ),
-  );
-}
-
-class _CodeBox extends StatelessWidget {
-  final String char;
-  const _CodeBox({required this.char});
-  @override
-  Widget build(BuildContext context) => Container(
-    width: 32, height: 38, margin: const EdgeInsets.symmetric(horizontal: 2),
-    decoration: BoxDecoration(
-      color: const Color(0xFF6C63FF).withOpacity(0.12),
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.4)),
-    ),
-    alignment: Alignment.center,
-    child: Text(char, style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white)),
-  );
-}
-
-class _SingleInput extends StatelessWidget {
-  final TextEditingController ctrl;
-  final FocusNode focus;
-  final FocusNode? next;
-  final FocusNode? prev;
-  const _SingleInput({required this.ctrl, required this.focus, this.next, this.prev});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: 32, height: 42, margin: const EdgeInsets.symmetric(horizontal: 2),
-    child: TextField(
-      controller: ctrl,
-      focusNode: focus,
-      maxLength: 1,
-      textAlign: TextAlign.center,
-      textCapitalization: TextCapitalization.characters,
-      style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white),
-      decoration: InputDecoration(
-        counterText: '',
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.06),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFF6C63FF), width: 2),
-        ),
-        contentPadding: EdgeInsets.zero,
-      ),
-      onChanged: (v) {
-        if (v.isNotEmpty && next != null) {
-          next!.requestFocus();
-        } else if (v.isEmpty && prev != null) {
-          prev!.requestFocus();
-        }
-      },
     ),
   );
 }
@@ -523,18 +507,18 @@ class _InstrStep extends StatelessWidget {
   const _InstrStep({required this.num, required this.text});
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 5),
+    padding: const EdgeInsets.symmetric(vertical: 4),
     child: Row(
       children: [
         Container(
-          width: 22, height: 22,
+          width: 20, height: 20,
           decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF6C63FF).withOpacity(0.2),
             border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.4))),
           alignment: Alignment.center,
-          child: Text('$num', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6C63FF))),
+          child: Text('$num', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF6C63FF))),
         ),
         const SizedBox(width: 10),
-        Expanded(child: Text(text, style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.75)))),
+        Expanded(child: Text(text, style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.8)))),
       ],
     ),
   );

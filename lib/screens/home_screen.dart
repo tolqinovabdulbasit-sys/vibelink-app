@@ -39,10 +39,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final vibeService = context.read<VibrationService>();
     final devService = context.read<DeviceService>();
 
-    // Connect to MQTT broker
-    peerService.connect(devService.myDeviceId);
+    peerService.init(devService.myDeviceId);
+
+    // If already paired with active device, auto-join its room
     if (devService.activeDevice != null) {
-      peerService.setTarget(devService.activeDevice!.id);
+      peerService.joinChannel(devService.activeDevice!.id);
     }
 
     peerService.onVibeReceived = (pattern) {
@@ -91,6 +92,11 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Make sure we are connected to the channel
+    if (peerService.currentChannel != active.id) {
+      peerService.joinChannel(active.id);
+    }
+
     setState(() {
       _selectedPreset = pattern;
       _ackStates[0] = 'done';
@@ -101,8 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     peerService.sendPattern(pattern, active.id);
 
-    // Fast progress to stage 2
-    Future.delayed(const Duration(milliseconds: 30), () {
+    Future.delayed(const Duration(milliseconds: 40), () {
       if (mounted) setState(() => _ackStates[1] = 'done');
     });
   }
@@ -115,6 +120,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (active == null) {
       _showToast("Avval qurilma tanlang!");
       return;
+    }
+
+    if (peerService.currentChannel != active.id) {
+      peerService.joinChannel(active.id);
     }
 
     setState(() => _isHoldingLive = true);
@@ -177,7 +186,10 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Mening ID: ${ds.myDeviceId}',
               style: const TextStyle(color: Colors.white, fontFamily: 'JetBrains Mono', fontSize: 13)),
             const SizedBox(height: 8),
-            Text('Server holati: ${ps.isConnected ? "🟢 Ulangan (MQTT WSS)" : "🔴 Ulanmagan"}',
+            Text('Kanal: ${ps.currentChannel.isNotEmpty ? ps.currentChannel : "Ulanmagan"}',
+              style: const TextStyle(color: Color(0xFF00D4FF), fontFamily: 'JetBrains Mono', fontSize: 13)),
+            const SizedBox(height: 8),
+            Text('Holat: ${ps.isConnected ? "🟢 Serverga ulangan (HTTPS 443)" : "🔴 Ulanmagan"}',
               style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13)),
             const SizedBox(height: 8),
             Text('Sherik: ${ds.activeDevice != null ? ds.activeDevice!.name : "Tanlanmagan"} (${ps.isPeerOnline ? "🟢 Onlayn" : "⚪ Oflayn"})',
@@ -219,7 +231,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            Text('Qurilma IDsi (Nusxalash uchun bosing)', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
+            Text('Qurilma IDsi', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
             const SizedBox(height: 4),
             InkWell(
               onTap: () {
@@ -408,7 +420,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: PresetCard(
                 pattern: kBuiltinPresets[i],
                 isSelected: _selectedPreset?.id == kBuiltinPresets[i].id,
-                onTap: () => _sendPattern(kBuiltinPresets[i]), // Instant send on tap
+                onTap: () => _sendPattern(kBuiltinPresets[i]), // Instant 0ms send
               ),
             ),
           ),

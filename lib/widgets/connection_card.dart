@@ -25,15 +25,15 @@ class ConnectionCard extends StatelessWidget {
         } else if (!isConnectedToServer) {
           statusColor = const Color(0xFFF59E0B);
           titleText = "Serverga ulanmoqda...";
-          subtitleText = active.name;
+          subtitleText = '${active.name} · ${ps.relayType.shortLabel}';
         } else if (isPeerOnline) {
-          statusColor = const Color(0xFF22C55E); // Green
+          statusColor = const Color(0xFF22C55E);
           titleText = "Ulanish o'rnatildi (Onlayn)";
-          subtitleText = active.name;
+          subtitleText = '${active.name} · ${ps.relayType.shortLabel}';
         } else {
-          statusColor = Colors.white54; // Offline
+          statusColor = Colors.white54;
           titleText = "Qurilma oflayn";
-          subtitleText = "${active.name} (Internet kutilyapti)";
+          subtitleText = '${active.name} · ${ps.relayType.shortLabel}';
         }
 
         return Container(

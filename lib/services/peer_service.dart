@@ -1,182 +1,153 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:mqtt_client/mqtt_client.dart';
-import 'package:mqtt_client/mqtt_server_client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/vibration_pattern.dart';
+import 'relay_backend.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected }
 
 class PeerService extends ChangeNotifier {
-  MqttServerClient? _client;
+  RelayBackend? _backend;
+  RelayType _relayType = RelayType.websocket;
   ConnectionStatus _status = ConnectionStatus.disconnected;
   String _myId = '';
+  String _currentChannel = '';
   String? _targetPeerId;
-  String? _currentPairTopic;
+
   Timer? _pingTimer;
   Timer? _reconnectTimer;
   Timer? _liveWatchdog;
   bool _isLive = false;
+  DateTime? _lastPeerSeen;
+
+  // Public getters
+  bool get isPeerOnline =>
+      _lastPeerSeen != null &&
+      DateTime.now().difference(_lastPeerSeen!).inSeconds < 8;
 
   ConnectionStatus get status => _status;
   bool get isConnected => _status == ConnectionStatus.connected;
   bool get isLive => _isLive;
-  String? get targetPeerId => _targetPeerId;
+  String get currentChannel => _currentChannel;
+  RelayType get relayType => _relayType;
 
   // Callbacks
   Function(VibrationPattern)? onVibeReceived;
   Function()? onLiveStart;
   Function()? onLiveStop;
   Function(String)? onAckReceived;
-  Function(String peerId, String name)? onPairRequestReceived;
-  Function(String peerId, String name)? onPairAccepted;
+  Function(String peerId, String name)? onPeerJoined;
   Function(String status)? onPeerStatusChanged;
   Function(String)? onError;
 
-  DateTime? _lastPongReceived;
-  bool get isPeerOnline =>
-      _lastPongReceived != null &&
-      DateTime.now().difference(_lastPongReceived!).inSeconds < 10;
+  // ──────────────────────────────────────────────
+  // Initialization
+  // ──────────────────────────────────────────────
 
-  Future<void> connect(String myPeerId) async {
-    if (_status == ConnectionStatus.connecting) return;
+  Future<void> init(String myPeerId) async {
     _myId = myPeerId;
+    // Load saved relay type
+    final prefs = await SharedPreferences.getInstance();
+    final savedType = prefs.getString('relay_type') ?? 'websocket';
+    _relayType = RelayTypeMeta.fromKey(savedType);
+  }
+
+  // ──────────────────────────────────────────────
+  // Switch backend (from Settings)
+  // ──────────────────────────────────────────────
+
+  Future<void> switchBackend(RelayType newType) async {
+    if (_relayType == newType && _backend != null) return;
+
+    _relayType = newType;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('relay_type', newType.key);
+
+    // Reconnect with new backend if already in a channel
+    if (_currentChannel.isNotEmpty) {
+      await joinChannel(_currentChannel);
+    }
+    notifyListeners();
+  }
+
+  // ──────────────────────────────────────────────
+  // Join channel / room
+  // ──────────────────────────────────────────────
+
+  Future<void> joinChannel(String channelCode) async {
+    final cleanCode = channelCode.trim().replaceAll(' ', '').toUpperCase();
+    if (cleanCode.isEmpty) return;
+
+    _currentChannel = cleanCode;
     _status = ConnectionStatus.connecting;
     notifyListeners();
 
-    try {
-      _client?.disconnect();
-      final clientId = 'VL_${_myId}_${DateTime.now().millisecondsSinceEpoch % 10000}';
-      
-      // Use broker.emqx.io with WSS port 8084 (SSL/TLS WebSocket - ultra low latency)
-      _client = MqttServerClient.withPort('broker.emqx.io', clientId, 8084);
-      _client!.useWebSocket = true;
-      _client!.websocketProtocols = MqttClientConstants.protocolsSingleDefault;
-      _client!.secure = true;
-      _client!.keepAlivePeriod = 20;
-      _client!.autoReconnect = true;
-      _client!.logging(on: false);
+    // Tear down old backend
+    _backend?.disconnect();
 
-      final connMessage = MqttConnectMessage()
-          .withClientIdentifier(clientId)
-          .startClean()
-          .withWillQos(MqttQos.atMostOnce);
-      _client!.connectionMessage = connMessage;
+    // Create fresh backend of the selected type
+    _backend = createBackend(_relayType);
 
-      final result = await _client!.connect().timeout(const Duration(seconds: 8));
-
-      if (result?.state == MqttConnectionState.connected) {
-        _status = ConnectionStatus.connected;
-        notifyListeners();
-        _subscribeToMyTopic();
-        _startListening();
-        _startPing();
-      } else {
-        _fallbackConnect();
-      }
-    } catch (e) {
-      debugPrint('EMQX connect error: $e');
-      _fallbackConnect();
-    }
-  }
-
-  Future<void> _fallbackConnect() async {
-    try {
-      final clientId = 'VL_${_myId}_${DateTime.now().millisecondsSinceEpoch % 10000}';
-      _client = MqttServerClient.withPort('broker.hivemq.com', clientId, 8000);
-      _client!.useWebSocket = true;
-      _client!.websocketProtocols = MqttClientConstants.protocolsSingleDefault;
-      _client!.secure = false;
-      _client!.keepAlivePeriod = 20;
-      _client!.autoReconnect = true;
-      _client!.logging(on: false);
-
-      final connMessage = MqttConnectMessage()
-          .withClientIdentifier(clientId)
-          .startClean();
-      _client!.connectionMessage = connMessage;
-
-      final result = await _client!.connect().timeout(const Duration(seconds: 8));
-      if (result?.state == MqttConnectionState.connected) {
-        _status = ConnectionStatus.connected;
-        notifyListeners();
-        _subscribeToMyTopic();
-        _startListening();
-        _startPing();
-      } else {
-        _status = ConnectionStatus.disconnected;
-        notifyListeners();
-        _scheduleReconnect();
-      }
-    } catch (e) {
+    _backend!.onMessage = (data) => _handleData(data);
+    _backend!.onConnected = () {
+      _status = ConnectionStatus.connected;
+      notifyListeners();
+      debugPrint('[PEER] Connected via ${_relayType.shortLabel} to channel: $cleanCode');
+    };
+    _backend!.onDisconnected = () {
       _status = ConnectionStatus.disconnected;
       notifyListeners();
+      debugPrint('[PEER] Disconnected. Scheduling reconnect...');
+      _scheduleReconnect();
+    };
+
+    try {
+      await _backend!.connect(cleanCode);
+      if (_backend!.isConnected) {
+        _status = ConnectionStatus.connected;
+      }
+    } catch (e) {
+      debugPrint('[PEER] Join error: $e');
+      _status = ConnectionStatus.disconnected;
       _scheduleReconnect();
     }
+    notifyListeners();
+
+    // Start ping loop
+    sendPing();
+    _startPingTimer();
   }
 
-  void _subscribeToMyTopic() {
-    if (_client?.connectionStatus?.state == MqttConnectionState.connected) {
-      final topic = 'vibelink/dev/$_myId';
-      _client!.subscribe(topic, MqttQos.atMostOnce);
-      debugPrint('Subscribed to $topic');
-    }
-  }
+  // ──────────────────────────────────────────────
+  // Handle incoming data
+  // ──────────────────────────────────────────────
 
-  void listenToPairCode(String code) {
-    if (_currentPairTopic != null && _currentPairTopic != 'vibelink/pair/$code') {
-      _client?.unsubscribe(_currentPairTopic!);
-    }
-    _currentPairTopic = 'vibelink/pair/$code';
-    if (_client?.connectionStatus?.state == MqttConnectionState.connected) {
-      _client!.subscribe(_currentPairTopic!, MqttQos.atMostOnce);
-    }
-  }
-
-  void unlistenPairCode() {
-    if (_currentPairTopic != null) {
-      _client?.unsubscribe(_currentPairTopic!);
-      _currentPairTopic = null;
-    }
-  }
-
-  void _startListening() {
-    _client?.updates?.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
-      for (final msg in messages) {
-        try {
-          final recMessage = msg.payload as MqttPublishMessage;
-          final payloadStr = MqttPublishPayload.bytesToStringAsString(recMessage.payload.message);
-          final data = jsonDecode(payloadStr) as Map<String, dynamic>;
-          _handleMessage(data, msg.topic);
-        } catch (e) {
-          debugPrint('MQTT parse error: $e');
-        }
-      }
-    });
-  }
-
-  void _handleMessage(Map<String, dynamic> data, String topic) {
-    final type = data['type'] as String? ?? '';
+  void _handleData(Map<String, dynamic> data) {
     final fromId = data['fromId'] as String? ?? '';
+    final type = data['type'] as String? ?? '';
 
-    // Prevent echoing own messages
-    if (fromId == _myId && type != 'PING') return;
+    // Ignore own messages
+    if (fromId == _myId) return;
+
+    _lastPeerSeen = DateTime.now();
+    onPeerStatusChanged?.call('online');
+    notifyListeners();
 
     switch (type) {
-      case 'PAIR_REQ':
-        final fromName = data['fromName'] as String? ?? 'Qurilma';
-        onPairRequestReceived?.call(fromId, fromName);
-        // Automatically send PAIR_ACK back
-        _publishToTopic('vibelink/dev/$fromId', {
-          'type': 'PAIR_ACK',
+      case 'HELLO':
+        final name = data['name'] as String? ?? 'Sherik';
+        onPeerJoined?.call(fromId, name);
+        _publish({
+          'type': 'HELLO_ACK',
           'fromId': _myId,
-          'fromName': 'Sherik',
+          'name': 'Mening Telefonim',
         });
         break;
 
-      case 'PAIR_ACK':
-        final name = data['fromName'] as String? ?? 'Qurilma';
-        onPairAccepted?.call(fromId, name);
+      case 'HELLO_ACK':
+        final name = data['name'] as String? ?? 'Sherik';
+        onPeerJoined?.call(fromId, name);
         break;
 
       case 'VIBE':
@@ -186,8 +157,8 @@ class PeerService extends ChangeNotifier {
           onVibeReceived?.call(pattern);
         }
         final msgId = data['id'] as String? ?? '';
-        if (msgId.isNotEmpty && fromId.isNotEmpty) {
-          _publishToTopic('vibelink/dev/$fromId', {
+        if (msgId.isNotEmpty) {
+          _publish({
             'type': 'ACK',
             'id': msgId,
             'fromId': _myId,
@@ -219,20 +190,14 @@ class PeerService extends ChangeNotifier {
         break;
 
       case 'PING':
-        if (fromId.isNotEmpty) {
-          _publishToTopic('vibelink/dev/$fromId', {
-            'type': 'PONG',
-            'fromId': _myId,
-          });
-        }
+        _publish({
+          'type': 'PONG',
+          'fromId': _myId,
+        });
         break;
 
       case 'PONG':
-        if (fromId == _targetPeerId) {
-          _lastPongReceived = DateTime.now();
-          onPeerStatusChanged?.call('online');
-          notifyListeners();
-        }
+        // Peer is alive — already tracked above
         break;
 
       case 'ACK':
@@ -244,7 +209,6 @@ class PeerService extends ChangeNotifier {
 
   void _resetLiveWatchdog() {
     _liveWatchdog?.cancel();
-    // If no live tick within 400ms, auto-stop to prevent sticking
     _liveWatchdog = Timer(const Duration(milliseconds: 400), () {
       if (_isLive) {
         _isLive = false;
@@ -254,27 +218,30 @@ class PeerService extends ChangeNotifier {
     });
   }
 
-  void setTarget(String peerId) {
-    _targetPeerId = peerId;
-    _lastPongReceived = null;
-    _sendPing();
-    notifyListeners();
+  // ──────────────────────────────────────────────
+  // Publish via selected backend
+  // ──────────────────────────────────────────────
+
+  Future<void> _publish(Map<String, dynamic> data) async {
+    if (_backend == null || _currentChannel.isEmpty) return;
+    await _backend!.publish(data);
   }
 
-  // --- Immediate Low-Latency Transmission ---
+  // ──────────────────────────────────────────────
+  // Outgoing messages
+  // ──────────────────────────────────────────────
 
-  Future<void> sendPairRequest(String code, String myName) async {
-    listenToPairCode(code);
-    _publishToTopic('vibelink/pair/$code', {
-      'type': 'PAIR_REQ',
+  void sendHello(String myName) {
+    _publish({
+      'type': 'HELLO',
       'fromId': _myId,
-      'fromName': myName,
+      'name': myName,
     });
   }
 
-  Future<void> sendPattern(VibrationPattern pattern, String targetId) async {
+  void sendPattern(VibrationPattern pattern, String targetId) {
     final msgId = DateTime.now().millisecondsSinceEpoch.toString();
-    _publishToTopic('vibelink/dev/$targetId', {
+    _publish({
       'type': 'VIBE',
       'id': msgId,
       'fromId': _myId,
@@ -284,54 +251,33 @@ class PeerService extends ChangeNotifier {
   }
 
   void sendLiveStart(String targetId) {
-    _publishToTopic('vibelink/dev/$targetId', {
-      'type': 'LIVE_START',
-      'fromId': _myId,
-    });
+    _publish({'type': 'LIVE_START', 'fromId': _myId});
   }
 
   void sendLiveTick(String targetId) {
-    _publishToTopic('vibelink/dev/$targetId', {
-      'type': 'LIVE_TICK',
-      'fromId': _myId,
-    });
+    _publish({'type': 'LIVE_TICK', 'fromId': _myId});
   }
 
   void sendLiveStop(String targetId) {
-    _publishToTopic('vibelink/dev/$targetId', {
-      'type': 'LIVE_STOP',
-      'fromId': _myId,
-    });
+    _publish({'type': 'LIVE_STOP', 'fromId': _myId});
   }
 
-  void _sendPing() {
-    if (_targetPeerId != null && _targetPeerId!.isNotEmpty) {
-      _publishToTopic('vibelink/dev/$_targetPeerId', {
-        'type': 'PING',
-        'fromId': _myId,
-      });
-    }
+  void sendPing() {
+    _publish({'type': 'PING', 'fromId': _myId});
   }
 
-  void _publishToTopic(String topic, Map<String, dynamic> data) {
-    if (_client?.connectionStatus?.state == MqttConnectionState.connected) {
-      final builder = MqttClientPayloadBuilder();
-      builder.addString(jsonEncode(data));
-      _client!.publishMessage(topic, MqttQos.atMostOnce, builder.payload!);
-    } else {
-      debugPrint('Cannot publish: MQTT disconnected');
-      if (_status != ConnectionStatus.connecting) {
-        connect(_myId);
-      }
-    }
-  }
+  // ──────────────────────────────────────────────
+  // Ping timer & reconnect
+  // ──────────────────────────────────────────────
 
-  void _startPing() {
+  void _startPingTimer() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      _sendPing();
-      if (_lastPongReceived != null &&
-          DateTime.now().difference(_lastPongReceived!).inSeconds >= 8) {
+    _pingTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (_status == ConnectionStatus.connected && _currentChannel.isNotEmpty) {
+        sendPing();
+      }
+      if (_lastPeerSeen != null &&
+          DateTime.now().difference(_lastPeerSeen!).inSeconds >= 7) {
         onPeerStatusChanged?.call('offline');
         notifyListeners();
       }
@@ -340,11 +286,48 @@ class PeerService extends ChangeNotifier {
 
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 4), () {
-      if (_status != ConnectionStatus.connected && _myId.isNotEmpty) {
-        connect(_myId);
+    _reconnectTimer = Timer(const Duration(seconds: 3), () {
+      if (_currentChannel.isNotEmpty) {
+        joinChannel(_currentChannel);
       }
     });
+  }
+
+  void setTarget(String peerId) {
+    _targetPeerId = peerId;
+    notifyListeners();
+  }
+
+  // ──────────────────────────────────────────────
+  // Connection test (for Settings UI)
+  // ──────────────────────────────────────────────
+
+  Future<bool> testBackend(RelayType type) async {
+    try {
+      final testCh = 'test_${DateTime.now().millisecondsSinceEpoch}';
+      final backend = createBackend(type);
+      final completer = Completer<bool>();
+
+      backend.onConnected = () {
+        if (!completer.isCompleted) completer.complete(true);
+      };
+      backend.onDisconnected = () {
+        if (!completer.isCompleted) completer.complete(false);
+      };
+
+      await backend.connect(testCh);
+
+      // Wait up to 6 seconds
+      final result = await completer.future.timeout(
+        const Duration(seconds: 6),
+        onTimeout: () => false,
+      );
+
+      backend.disconnect();
+      return result;
+    } catch (e) {
+      return false;
+    }
   }
 
   @override
@@ -352,7 +335,7 @@ class PeerService extends ChangeNotifier {
     _pingTimer?.cancel();
     _reconnectTimer?.cancel();
     _liveWatchdog?.cancel();
-    _client?.disconnect();
+    _backend?.disconnect();
     super.dispose();
   }
 }

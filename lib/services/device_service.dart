@@ -69,9 +69,9 @@ class DeviceService extends ChangeNotifier {
   }
 
   String generatePairingCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    // Generate simple 6-digit PIN (e.g. 583291)
     final rand = Random.secure();
-    _currentCode = List.generate(8, (_) => chars[rand.nextInt(chars.length)]).join();
+    _currentCode = (rand.nextInt(900000) + 100000).toString();
     _codeExpiry = DateTime.now().add(const Duration(minutes: 15));
     _codeUsed = false;
     notifyListeners();
@@ -80,7 +80,7 @@ class DeviceService extends ChangeNotifier {
 
   bool validateCode(String code) {
     if (!codeIsValid) return false;
-    return code.toUpperCase() == _currentCode.toUpperCase();
+    return code.replaceAll(' ', '').toUpperCase() == _currentCode;
   }
 
   void markCodeUsed() {
@@ -89,8 +89,8 @@ class DeviceService extends ChangeNotifier {
   }
 
   Future<DeviceModel> addDevice({required String peerId, String name = ''}) async {
-    // If device already exists, update its name and activate it
-    final existingIndex = _pairedDevices.indexWhere((d) => d.id == peerId);
+    final cleanId = peerId.trim().replaceAll(' ', '').toUpperCase();
+    final existingIndex = _pairedDevices.indexWhere((d) => d.id == cleanId);
     if (existingIndex >= 0) {
       if (name.trim().isNotEmpty) {
         _pairedDevices[existingIndex].name = name.trim();
@@ -104,7 +104,7 @@ class DeviceService extends ChangeNotifier {
 
     final deviceName = name.trim().isEmpty ? 'Phone ${_pairedDevices.length + 1}' : name.trim();
     final device = DeviceModel(
-      id: peerId,
+      id: cleanId,
       name: deviceName,
       status: 'online',
       lastSeen: DateTime.now(),

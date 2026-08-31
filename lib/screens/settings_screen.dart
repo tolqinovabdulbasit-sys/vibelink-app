@@ -6,6 +6,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../services/device_service.dart';
 import '../services/vibration_service.dart';
 import '../services/peer_service.dart';
+import '../services/relay_backend.dart';
 import '../models/vibration_pattern.dart';
 import '../models/device_model.dart';
 
@@ -21,6 +22,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notifications = true;
   bool _bgMode = true;
   String _selectedLang = 'Русский';
+  Map<RelayType, bool?> _testResults = {};
+  RelayType? _testingType;
 
   @override
   void initState() {
@@ -129,7 +132,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Icon(Icons.vibration_rounded, color: Color(0xFF6C63FF)),
             SizedBox(width: 8),
-            Text('VibeLink v1.0.1', style: TextStyle(color: Colors.white, fontSize: 18)),
+            Text('VibeLink v1.1.0', style: TextStyle(color: Colors.white, fontSize: 18)),
           ],
         ),
         content: Column(
@@ -138,7 +141,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             const Text('Real-Vaqtli Masofaviy Vibratsiya Boshqaruv Tizimi', style: TextStyle(color: Colors.white70, fontSize: 13)),
             const SizedBox(height: 12),
-            Text('• Ultra-past kechikish (WSS MQTT)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• 3 xil transport backend (WSS / Stream / Poll)', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+            Text('• Port 443 (HTTPS) — hech qachon bloklanmaydi', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
             Text('• 10 ta o\'rnatilgan vibro-signal', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
             Text('• Shaxsiy Pattern Studio', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
             Text('• 0ms javob beruvchi Live Touch', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
@@ -284,6 +288,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ──────────────────────────────────────────────
+  // Switch transport backend
+  // ──────────────────────────────────────────────
+
+  Future<void> _switchTransport(RelayType type) async {
+    final ps = context.read<PeerService>();
+    setState(() => _testingType = type);
+    
+    await ps.switchBackend(type);
+    
+    setState(() => _testingType = null);
+    _showSnack('${type.label} ga almashtirildi!');
+  }
+
+  Future<void> _testTransport(RelayType type) async {
+    setState(() {
+      _testingType = type;
+      _testResults[type] = null; // null = testing
+    });
+
+    final ps = context.read<PeerService>();
+    final result = await ps.testBackend(type);
+
+    setState(() {
+      _testResults[type] = result;
+      _testingType = null;
+    });
+
+    _showSnack(result
+        ? '✅ ${type.shortLabel} ishlaydi!'
+        : '❌ ${type.shortLabel} ishlamadi');
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -299,6 +336,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // My device card
             Consumer<DeviceService>(
               builder: (_, ds, __) => _buildMyDeviceCard(ds),
+            ),
+            const SizedBox(height: 18),
+
+            // ═══════════════════════════════════════
+            // 🔥 TRANSPORT BACKEND SWITCHER
+            // ═══════════════════════════════════════
+            const Text('🚀 Transport (Ulanish turi)',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+            const SizedBox(height: 4),
+            Text('Biri ishlamasa, boshqasini tanlang — qayta o\'rnatish shart emas!',
+              style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.5))),
+            const SizedBox(height: 10),
+            Consumer<PeerService>(
+              builder: (_, ps, __) => Column(
+                children: RelayType.values.map((type) => 
+                  _buildTransportTile(type, ps.relayType == type),
+                ).toList(),
+              ),
             ),
             const SizedBox(height: 18),
 
@@ -384,11 +439,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SettingsTile(
               icon: 'ℹ️',
               title: 'Versiya',
-              subtitle: 'VibeLink v1.0.1',
+              subtitle: 'VibeLink v1.1.0',
               onTap: _showVersionDialog,
               trailing: Icon(Icons.chevron_right_rounded, color: Colors.white.withOpacity(0.3)),
             ),
             const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ──────────────────────────────────────────────
+  // Transport tile with test button
+  // ──────────────────────────────────────────────
+
+  Widget _buildTransportTile(RelayType type, bool isActive) {
+    final testResult = _testResults[type];
+    final isTesting = _testingType == type;
+
+    // Icon
+    IconData iconData;
+    switch (type) {
+      case RelayType.websocket:  iconData = Icons.bolt_rounded; break;
+      case RelayType.httpStream: iconData = Icons.stream_rounded; break;
+      case RelayType.httpPoll:   iconData = Icons.sync_rounded; break;
+    }
+
+    // Border/accent color
+    Color accentColor;
+    if (isActive) {
+      accentColor = const Color(0xFF6C63FF);
+    } else if (testResult == true) {
+      accentColor = const Color(0xFF22C55E);
+    } else if (testResult == false) {
+      accentColor = const Color(0xFFEF4444);
+    } else {
+      accentColor = Colors.white.withOpacity(0.08);
+    }
+
+    return GestureDetector(
+      onTap: () => _switchTransport(type),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFF6C63FF).withOpacity(0.12) : const Color(0xFF12122A),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: accentColor, width: isActive ? 1.8 : 1),
+        ),
+        child: Row(
+          children: [
+            // Icon
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: (isActive ? const Color(0xFF6C63FF) : Colors.white).withOpacity(0.1),
+              ),
+              child: Icon(iconData, color: isActive ? const Color(0xFF6C63FF) : Colors.white54, size: 18),
+            ),
+            const SizedBox(width: 12),
+            // Text
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    type.shortLabel,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      color: isActive ? Colors.white : Colors.white.withOpacity(0.85),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    type.description,
+                    style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5)),
+                  ),
+                ],
+              ),
+            ),
+            // Test button
+            GestureDetector(
+              onTap: () => _testTransport(type),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: isTesting
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6C63FF)),
+                      )
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (testResult == true)
+                            const Icon(Icons.check_circle, color: Color(0xFF22C55E), size: 14)
+                          else if (testResult == false)
+                            const Icon(Icons.cancel, color: Color(0xFFEF4444), size: 14)
+                          else
+                            const Icon(Icons.speed_rounded, color: Colors.white54, size: 14),
+                          const SizedBox(width: 4),
+                          Text(
+                            testResult == true ? 'OK' : testResult == false ? 'Xato' : 'Test',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: testResult == true
+                                  ? const Color(0xFF22C55E)
+                                  : testResult == false
+                                      ? const Color(0xFFEF4444)
+                                      : Colors.white54,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            // Active checkmark
+            if (isActive)
+              const Icon(Icons.check_circle_rounded, color: Color(0xFF6C63FF), size: 20)
+            else
+              Icon(Icons.radio_button_off_rounded, color: Colors.white.withOpacity(0.2), size: 20),
           ],
         ),
       ),

@@ -23,24 +23,27 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
 
   void _start() {
-    _t = Timer.periodic(const Duration(milliseconds: 30), (timer) async {
+    _t = Timer.periodic(const Duration(milliseconds: 25), (timer) async {
       if (!mounted) return;
-      setState(() => _progress += 0.033);
+      setState(() => _progress += 0.04);
       if (_progress >= 1.0) {
         timer.cancel();
-        await Future.delayed(const Duration(milliseconds: 200));
         if (!mounted) return;
         final devService = context.read<DeviceService>();
         final peerService = context.read<PeerService>();
-        // Connect to signaling with my device ID
-        await peerService.connect(devService.myDeviceId);
+        
+        await peerService.init(devService.myDeviceId);
+        if (devService.activeDevice != null) {
+          peerService.joinChannel(devService.activeDevice!.id);
+        }
+
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
             pageBuilder: (_, __, ___) => const MainScaffold(),
             transitionsBuilder: (_, anim, __, child) =>
                 FadeTransition(opacity: anim, child: child),
-            transitionDuration: const Duration(milliseconds: 500),
+            transitionDuration: const Duration(milliseconds: 300),
           ),
         );
       }
