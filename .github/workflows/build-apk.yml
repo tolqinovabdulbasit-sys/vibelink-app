@@ -4,6 +4,16 @@ on:
   push:
     branches: [ main, st01 ]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build rejimi (release, debug, both)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+          - both
 
 jobs:
   build:
@@ -34,25 +44,36 @@ jobs:
       - name: 🔍 Kod tekshiruvi
         run: flutter analyze --no-fatal-infos || true
 
-      - name: 🔨 Debug APK yaratish
+      - name: 🔨 Release APK yaratish
+        if: ${{ github.event_name == 'push' || github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' }}
+        run: |
+          flutter build apk --release \
+            --build-name="1.0.${{ github.run_number }}" \
+            --build-number="${{ github.run_number }}"
+          mkdir -p artifacts
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "artifacts/VibeLink-Release-v1.0.${{ github.run_number }}.apk"
+
+      - name: 🔨 Debug APK yaratish (zaxira)
+        if: ${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' }}
         run: |
           flutter build apk --debug \
             --build-name="1.0.${{ github.run_number }}" \
             --build-number="${{ github.run_number }}"
-
-      - name: 📋 APK ni saqlash
-        run: |
           mkdir -p artifacts
           cp build/app/outputs/flutter-apk/app-debug.apk \
-             "artifacts/VibeLink-v1.0.${{ github.run_number }}.apk"
-          echo "✅ APK tayyor:"
+             "artifacts/VibeLink-Debug-v1.0.${{ github.run_number }}.apk"
+
+      - name: 📋 APK larni saqlash va ko'rsatish
+        run: |
+          echo "✅ Tayyor APK fayllar:"
           ls -lh artifacts/
 
       - name: 📤 APK ni Artifacts ga yuklash
         uses: actions/upload-artifact@v4
         with:
           name: "VibeLink-APK-build-${{ github.run_number }}"
-          path: "artifacts/VibeLink-v1.0.${{ github.run_number }}.apk"
+          path: "artifacts/*.apk"
           retention-days: 90
 
       - name: 📊 Build xulosasi
@@ -61,7 +82,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| | |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 Fayl | VibeLink-v1.0.${{ github.run_number }}.apk |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 Build turi | Release (Optimizatsiya qilingan) |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔢 Build | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 📅 Sana | $(date '+%Y-%m-%d %H:%M UTC') |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
