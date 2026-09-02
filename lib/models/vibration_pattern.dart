@@ -60,34 +60,6 @@ class VibrationPattern {
   );
 }
 
-class VibrationHistory {
-  final String patternName;
-  final String deviceName;
-  final DateTime time;
-  final bool delivered;
-
-  VibrationHistory({
-    required this.patternName,
-    required this.deviceName,
-    required this.time,
-    required this.delivered,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'patternName': patternName,
-    'deviceName': deviceName,
-    'time': time.toIso8601String(),
-    'delivered': delivered,
-  };
-
-  factory VibrationHistory.fromJson(Map<String, dynamic> json) => VibrationHistory(
-    patternName: json['patternName'] ?? '',
-    deviceName: json['deviceName'] ?? '',
-    time: json['time'] != null ? DateTime.parse(json['time']) : DateTime.now(),
-    delivered: json['delivered'] ?? true,
-  );
-}
-
 // ---- Exactly 10 Built-in Presets Matching UI Design ----
 final List<VibrationPattern> kBuiltinPresets = [
   VibrationPattern(

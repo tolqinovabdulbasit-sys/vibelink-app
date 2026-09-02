@@ -60,7 +60,7 @@ abstract class RelayBackend {
 }
 
 // ──────────────────────────────────────────────
-// Backend 1: PubNub Anycast Realtime Cloud (100% Unblockable across all cities)
+// Backend 1: PubNub Anycast Realtime Cloud (Ultra-Fast Hybrid GET/POST)
 // ──────────────────────────────────────────────
 class PubNubBackend extends RelayBackend {
   Timer? _subTimer;
@@ -134,9 +134,21 @@ class PubNubBackend extends RelayBackend {
   Future<void> publish(Map<String, dynamic> data) async {
     if (_ch.isEmpty) return;
     try {
-      final jsonEncoded = Uri.encodeComponent(jsonEncode(data));
-      final url = Uri.parse('https://ps.pndsn.com/publish/demo/demo/0/${_topic(_ch)}/0/$jsonEncoded');
-      http.get(url);
+      final jsonStr = jsonEncode(data);
+      // For short messages (< 800 chars, e.g. Presets, Ping, Ack), use ultra-fast GET
+      if (jsonStr.length < 800) {
+        final jsonEncoded = Uri.encodeComponent(jsonStr);
+        final url = Uri.parse('https://ps.pndsn.com/publish/demo/demo/0/${_topic(_ch)}/0/$jsonEncoded');
+        http.get(url);
+      } else {
+        // For large custom studio patterns, use robust POST to prevent URL truncation
+        final url = Uri.parse('https://ps.pndsn.com/publish/demo/demo/0/${_topic(_ch)}/0');
+        http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonStr,
+        );
+      }
     } catch (_) {}
   }
 

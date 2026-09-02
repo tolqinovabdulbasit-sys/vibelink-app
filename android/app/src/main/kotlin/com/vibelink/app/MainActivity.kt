@@ -99,20 +99,48 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun vibrateDirect(durationMs: Long, amplitude: Int) {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            vibratorManager.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        }
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vibratorManager.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val amp = amplitude.coerceIn(1, 255)
-            vibrator.vibrate(VibrationEffect.createOneShot(durationMs, amp))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(durationMs)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val hasAmp = vibrator.hasAmplitudeControl()
+                if (hasAmp) {
+                    val amp = amplitude.coerceIn(1, 255)
+                    vibrator.vibrate(VibrationEffect.createOneShot(durationMs, amp))
+                } else {
+                    // Fallback on devices without hardware amplitude control: emulate intensity with micro-pulses
+                    val amp = amplitude.coerceIn(1, 255)
+                    if (amp >= 220) {
+                        vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+                    } else {
+                        val ratio = (amp.toDouble() / 255.0).coerceIn(0.2, 0.8)
+                        val onMs = (40 * ratio).toLong().coerceIn(10L, 32L)
+                        val offMs = 40L - onMs
+                        val timings = mutableListOf<Long>(0L)
+                        var elapsed = 0L
+                        while (elapsed + 40L <= durationMs) {
+                            timings.add(onMs)
+                            timings.add(offMs)
+                            elapsed += 40L
+                        }
+                        if (durationMs > elapsed) {
+                            timings.add(durationMs - elapsed)
+                        }
+                        vibrator.vibrate(VibrationEffect.createWaveform(timings.toLongArray(), -1))
+                    }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(durationMs)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }

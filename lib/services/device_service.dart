@@ -1,8 +1,6 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 import '../models/device_model.dart';
 
 class DeviceService extends ChangeNotifier {
@@ -16,41 +14,40 @@ class DeviceService extends ChangeNotifier {
   List<DeviceModel> get pairedDevices => List.unmodifiable(_pairedDevices);
   DeviceModel? get activeDevice => _activeDevice;
 
-  // Pairing code state
-  String _currentCode = '';
-  DateTime? _codeExpiry;
-  bool _codeUsed = false;
-
-  String get currentCode => _currentCode;
-  DateTime? get codeExpiry => _codeExpiry;
-  bool get codeIsValid =>
-      _currentCode.isNotEmpty &&
-      _codeExpiry != null &&
-      DateTime.now().isBefore(_codeExpiry!) &&
-      !_codeUsed;
-
   DeviceService() {
     _init();
   }
 
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
-    _myDeviceId = prefs.getString('my_device_id') ?? '';
+    _myDeviceId = prefs.getString('my_device_id_v2') ?? '';
+
     if (_myDeviceId.isEmpty) {
-      final shortUuid = const Uuid().v4().replaceAll('-', '').substring(0, 8).toUpperCase();
-      _myDeviceId = 'VL-$shortUuid';
-      await prefs.setString('my_device_id', _myDeviceId);
+      // Allocate persistent short numeric ID ("01", "02", ...)
+      // If previous user had old ID or new install, start counter or generate simple 2-digit ID
+      final savedNum = prefs.getInt('device_numeric_id');
+      if (savedNum != null && savedNum > 0) {
+        _myDeviceId = savedNum.toString().padLeft(2, '0');
+      } else {
+        // Assign default 01 for first device, next devices can customize or set from settings
+        _myDeviceId = '01';
+        await prefs.setInt('device_numeric_id', 1);
+      }
+      await prefs.setString('my_device_id_v2', _myDeviceId);
     }
-    _myDeviceName = prefs.getString('my_device_name') ?? 'Telefon ${Random().nextInt(900) + 100}';
+
+    _myDeviceName = prefs.getString('my_device_name') ?? 'Telefon $_myDeviceId';
 
     final devicesJson = prefs.getString('paired_devices') ?? '[]';
-    final List decoded = jsonDecode(devicesJson);
-    _pairedDevices = decoded.map((d) => DeviceModel.fromJson(d)).toList();
+    try {
+      final List decoded = jsonDecode(devicesJson);
+      _pairedDevices = decoded.map((d) => DeviceModel.fromJson(d)).toList();
+    } catch (_) {
+      _pairedDevices = [];
+    }
 
-    // Auto-sanitize: Remove any temporary 6-digit PIN entries or self entries
-    _pairedDevices.removeWhere((d) =>
-      (d.id.length == 6 && int.tryParse(d.id) != null) || d.id == _myDeviceId
-    );
+    // Auto-sanitize: remove any self entries
+    _pairedDevices.removeWhere((d) => d.id == _myDeviceId);
 
     final activeId = prefs.getString('active_device_id');
     if (activeId != null) {
@@ -66,6 +63,16 @@ class DeviceService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setMyDeviceId(String newId) async {
+    final cleanId = newId.trim().padLeft(2, '0');
+    if (cleanId.isEmpty) return;
+    _myDeviceId = cleanId;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('my_device_id_v2', _myDeviceId);
+    _pairedDevices.removeWhere((d) => d.id == _myDeviceId);
+    notifyListeners();
+  }
+
   Future<void> setMyDeviceName(String name) async {
     _myDeviceName = name;
     final prefs = await SharedPreferences.getInstance();
@@ -73,28 +80,8 @@ class DeviceService extends ChangeNotifier {
     notifyListeners();
   }
 
-  String generatePairingCode() {
-    // Generate simple 6-digit PIN (e.g. 583291)
-    final rand = Random.secure();
-    _currentCode = (rand.nextInt(900000) + 100000).toString();
-    _codeExpiry = DateTime.now().add(const Duration(minutes: 15));
-    _codeUsed = false;
-    notifyListeners();
-    return _currentCode;
-  }
-
-  bool validateCode(String code) {
-    if (!codeIsValid) return false;
-    return code.replaceAll(' ', '').toUpperCase() == _currentCode;
-  }
-
-  void markCodeUsed() {
-    _codeUsed = true;
-    notifyListeners();
-  }
-
   Future<DeviceModel> addDevice({required String peerId, String name = ''}) async {
-    final cleanId = peerId.trim().replaceAll(' ', '').toUpperCase();
+    final cleanId = peerId.trim().padLeft(2, '0');
     final existingIndex = _pairedDevices.indexWhere((d) => d.id == cleanId);
     if (existingIndex >= 0) {
       if (name.trim().isNotEmpty) {
@@ -107,7 +94,7 @@ class DeviceService extends ChangeNotifier {
       return _pairedDevices[existingIndex];
     }
 
-    final deviceName = name.trim().isEmpty ? 'Phone ${_pairedDevices.length + 1}' : name.trim();
+    final deviceName = name.trim().isEmpty ? 'Sherik $cleanId' : name.trim();
     final device = DeviceModel(
       id: cleanId,
       name: deviceName,

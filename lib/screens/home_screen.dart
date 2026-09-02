@@ -10,7 +10,6 @@ import '../services/vibration_service.dart';
 import '../services/peer_service.dart';
 import '../models/vibration_pattern.dart';
 import '../widgets/preset_card.dart';
-import '../widgets/history_tile.dart';
 import '../widgets/connection_card.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -28,7 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _homeButtons = [];
 
   // Honest & Ultra-Fast Delivery Indicator
-  String _deliveryStatus = 'idle'; // 'idle', 'sent', 'delivered', 'failed'
+  String _deliveryStatus = 'idle'; // 'idle', 'sending', 'delivered', 'failed'
   String _lastDeliveredTime = '';
   Timer? _deliveryResetTimer;
 
@@ -82,8 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     peerService.onVibeReceived = (pattern) {
-      final active = devService.activeDevice;
-      vibeService.playPattern(pattern, deviceName: active?.name ?? 'Sherik');
+      vibeService.enqueuePattern(pattern);
     };
 
     peerService.onLiveStart = () => vibeService.startLive();
@@ -117,14 +115,13 @@ class _HomeScreenState extends State<HomeScreen> {
     };
   }
 
-  // Ultra-Fast Zero-Latency Direct Messaging
   void _sendPattern(VibrationPattern pattern) {
     final deviceService = context.read<DeviceService>();
     final peerService = context.read<PeerService>();
     final active = deviceService.activeDevice;
 
     if (active == null) {
-      _showToast("Qurilma ulanmagan! 'Sozlamalar' bo'limidan qo'shing.");
+      _showToast("Qurilma ulanmagan! 'Qurilmalar' bo'limidan qo'shing.");
       return;
     }
 
@@ -207,7 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ListTile(
               leading: const Icon(Icons.phone_android_rounded, color: Color(0xFF6C63FF)),
               title: const Text('Mening Qurilma ID', style: TextStyle(color: Colors.white, fontSize: 14)),
-              subtitle: Text(ds.myDeviceId, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11)),
+              subtitle: Text(ds.myDeviceId, style: const TextStyle(color: Color(0xFF00D4FF), fontSize: 14, fontWeight: FontWeight.bold)),
               onTap: () {
                 Clipboard.setData(ClipboardData(text: ds.myDeviceId));
                 Navigator.pop(context);
@@ -224,34 +221,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   _showToast('Qayta ulanmoqda...');
                 }
               },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showAllHistory() {
-    final vibeService = context.read<VibrationService>();
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF12122A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => Container(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            const Text('Signal Tarixi', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 12),
-            Expanded(
-              child: vibeService.history.isEmpty
-                  ? Center(child: Text('Tarix bo\'sh', style: TextStyle(color: Colors.white.withOpacity(0.4))))
-                  : ListView.builder(
-                      itemCount: vibeService.history.length,
-                      itemBuilder: (_, i) => HistoryTile(history: vibeService.history[i]),
-                    ),
             ),
           ],
         ),
@@ -276,7 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     _buildPresetsSection(),
                     _buildLiveTouchArea(),
-                    _buildHistorySection(),
+                    const SizedBox(height: 24),
                   ],
                 ),
               ),
@@ -506,58 +475,6 @@ class _HomeScreenState extends State<HomeScreen> {
               }).toList(),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHistorySection() {
-    return Consumer<VibrationService>(
-      builder: (_, vibe, __) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Tarix',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
-                InkWell(
-                  onTap: _showAllHistory,
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    child: Text(
-                      'Hammasi',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF6C63FF),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (vibe.history.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: Text(
-                  'Tarix bo\'sh',
-                  style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12),
-                ),
-              ),
-            )
-          else
-            ...vibe.history.take(3).map((h) => HistoryTile(history: h)),
         ],
       ),
     );
