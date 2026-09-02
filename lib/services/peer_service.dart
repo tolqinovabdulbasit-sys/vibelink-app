@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/vibration_pattern.dart';
 import 'relay_backend.dart';
 
@@ -43,6 +44,10 @@ class PeerService extends ChangeNotifier {
   String get deliveryStatus => _deliveryStatus;
   String get lastDeliveredTime => _lastDeliveredTime;
 
+  bool get isPeerOnline =>
+      _lastPeerSeen != null &&
+      DateTime.now().difference(_lastPeerSeen!).inSeconds < 5;
+
   static String getPairChannel(String a, String b) {
     final cleanA = a.trim().padLeft(2, '0').toUpperCase();
     final cleanB = b.trim().padLeft(2, '0').toUpperCase();
@@ -50,18 +55,31 @@ class PeerService extends ChangeNotifier {
     return 'pair_${sorted[0]}_${sorted[1]}';
   }
 
-  void init(String myId) {
+  Future<void> init(String myId) async {
     _myId = myId.trim().padLeft(2, '0').toUpperCase();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedType = prefs.getString('relay_type') ?? 'cloudPubNub';
+      _relayType = RelayTypeMeta.fromKey(savedType);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> switchBackend(RelayType newType) async {
+    if (_relayType == newType && _backend != null && _backend!.isConnected) return;
+    _relayType = newType;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('relay_type', newType.key);
+    } catch (_) {}
+    if (_currentChannel.isNotEmpty) {
+      await joinChannel(_currentChannel);
+    }
     notifyListeners();
   }
 
   void setRelayType(RelayType type) {
-    if (_relayType == type) return;
-    _relayType = type;
-    notifyListeners();
-    if (_currentChannel.isNotEmpty) {
-      joinChannel(_currentChannel);
-    }
+    switchBackend(type);
   }
 
   Future<void> joinChannel(String channel) async {
