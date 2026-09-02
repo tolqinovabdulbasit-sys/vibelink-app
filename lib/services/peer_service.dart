@@ -8,6 +8,7 @@ enum ConnectionStatus { disconnected, connecting, connected }
 
 class PeerService extends ChangeNotifier {
   String _myId = '';
+  String _myName = '';
   String? _targetPeerId;
   String _currentChannel = '';
   ConnectionStatus _status = ConnectionStatus.disconnected;
@@ -55,8 +56,9 @@ class PeerService extends ChangeNotifier {
     return 'pair_${sorted[0]}_${sorted[1]}';
   }
 
-  Future<void> init(String myId) async {
+  Future<void> init(String myId, {String myName = ''}) async {
     _myId = myId.trim().padLeft(2, '0').toUpperCase();
+    if (myName.isNotEmpty) _myName = myName;
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedType = prefs.getString('relay_type') ?? 'cloudPubNub';
@@ -119,8 +121,14 @@ class PeerService extends ChangeNotifier {
     final cleanPeer = peerId.trim().padLeft(2, '0').toUpperCase();
     if (cleanPeer.isEmpty || _myId.isEmpty) return;
     _targetPeerId = cleanPeer;
+    // Reset old peer status immediately — prevent stale "online" from previous peer
+    _lastPeerSeen = null;
+    onPeerStatusChanged?.call('offline');
+    notifyListeners();
     final sharedChannel = getPairChannel(_myId, cleanPeer);
     await joinChannel(sharedChannel);
+    // Introduce ourselves to the new peer right after joining
+    sendHello(_myName.isNotEmpty ? _myName : 'Telefon $_myId');
   }
 
   // ──────────────────────────────────────────────
@@ -152,7 +160,7 @@ class PeerService extends ChangeNotifier {
         _publish({
           'type': 'HELLO_ACK',
           'fromId': _myId,
-          'name': 'Sherik Telefon',
+          'name': _myName.isNotEmpty ? _myName : 'Telefon $_myId',
           'ts': DateTime.now().millisecondsSinceEpoch,
         });
         break;

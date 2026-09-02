@@ -74,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final vibeService = context.read<VibrationService>();
     final devService = context.read<DeviceService>();
 
-    peerService.init(devService.myDeviceId);
+    peerService.init(devService.myDeviceId, myName: devService.myDeviceName);
 
     if (devService.activeDevice != null) {
       peerService.connectWithPeer(devService.activeDevice!.id);

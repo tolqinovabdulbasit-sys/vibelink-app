@@ -5,11 +5,15 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.app.AlarmManager
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 
 class VibeLinkForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+
+    private var _stoppedByUser = false
 
     companion object {
         const val CHANNEL_ID = "vibelink_background_channel"
@@ -26,6 +30,7 @@ class VibeLinkForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            _stoppedByUser = true
             stopForeground(true)
             stopSelf()
             return START_NOT_STICKY
@@ -88,6 +93,24 @@ class VibeLinkForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // App was swiped from Recents — schedule a restart in 1 second
+        val restartIntent = Intent(applicationContext, VibeLinkForegroundService::class.java).apply {
+            setPackage(packageName)
+        }
+        val pendingIntent = PendingIntent.getService(
+            this, 1, restartIntent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.set(
+            AlarmManager.ELAPSED_REALTIME,
+            SystemClock.elapsedRealtime() + 1000,
+            pendingIntent
+        )
+    }
+
     override fun onDestroy() {
         try {
             if (wakeLock?.isHeld == true) {
@@ -96,6 +119,12 @@ class VibeLinkForegroundService : Service() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        // Restart service if killed by system (not by user-initiated ACTION_STOP)
+        if (!_stoppedByUser) {
+            val restartIntent = Intent(applicationContext, VibeLinkForegroundService::class.java)
+            startService(restartIntent)
+        }
+        _stoppedByUser = false
         super.onDestroy()
     }
 }

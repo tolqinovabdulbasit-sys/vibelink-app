@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/device_model.dart';
@@ -29,9 +30,10 @@ class DeviceService extends ChangeNotifier {
       if (savedNum != null && savedNum > 0) {
         _myDeviceId = savedNum.toString().padLeft(2, '0');
       } else {
-        // Assign default 01 for first device, next devices can customize or set from settings
-        _myDeviceId = '01';
-        await prefs.setInt('device_numeric_id', 1);
+        // New install: assign a unique random 2-digit ID (10–99) to avoid collisions
+        final rnd = Random().nextInt(90) + 10; // always 2-digit: 10 to 99
+        _myDeviceId = rnd.toString();
+        await prefs.setInt('device_numeric_id', rnd);
       }
       await prefs.setString('my_device_id_v2', _myDeviceId);
     }
